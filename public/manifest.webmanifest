@@ -1,0 +1,9 @@
+{
+  "name":"ADAPT — AI Learning System",
+  "short_name":"ADAPT",
+  "start_url":"/",
+  "display":"standalone",
+  "background_color":"#0D0618",
+  "theme_color":"#0D0618",
+  "icons":[{"src":"/favicon.svg","sizes":"64x64","type":"image/svg+xml"}]
+}
