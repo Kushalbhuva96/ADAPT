@@ -1,123 +1,28 @@
-import React from "react";
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
+import React, { useEffect, useState } from "react";
 import AppShell from "../components/layout/AppShell";
-import { topics } from "../data/mock";
-
-const chart = [
-  { name: "M", v: 45 },
-  { name: "T", v: 49 },
-  { name: "W", v: 52 },
-  { name: "T", v: 51 },
-  { name: "F", v: 58 },
-  { name: "S", v: 63 },
-  { name: "S", v: 67 },
-];
+import { api } from "../services/api";
 
 export default function Progress() {
-  return (
-    <AppShell breadcrumb="PROGRESS">
-      <div className="page">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "end" }}>
-          <div>
-            <div className="eyebrow">INTELLIGENCE ANALYTICS</div>
-            <h1 className="page-title" style={{ marginTop: 8 }}>Your Progress</h1>
-            <p className="page-subtitle">Not just what changed — but why it changed.</p>
-          </div>
-          <div className="badge success">+18% GROWTH</div>
-        </div>
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  useEffect(() => { api.progress().then(setData).catch((err) => setError(err.message)); }, []);
 
-        <div className="grid grid-4" style={{ marginTop: 24 }}>
-          <div className="card metric" style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <div className="ring" style={{ "--p": 74, width: 70, height: 70 }}>
-              <div><strong style={{ fontSize: 17 }}>74%</strong></div>
-            </div>
-            <div>
-              <div className="metric-label">OVERALL</div>
-              <div style={{ fontSize: 9, color: "var(--success)" }}>Strong upward movement</div>
-            </div>
-          </div>
-
-          {[
-            ["WEEKLY IMPROVEMENT", "+18%"],
-            ["ACCURACY", "78%"],
-            ["LEARNING TIME", "8.4h"],
-          ].map((x) => (
-            <div className="card metric" key={x[0]}>
-              <div className="metric-label">{x[0]}</div>
-              <div className="metric-value">{x[1]}</div>
-              <div className="metric-change">+12% this week</div>
-            </div>
-          ))}
-        </div>
-
-        <div className="grid grid-2" style={{ marginTop: 14 }}>
-          <div className="card card-pad">
-            <div className="eyebrow">LEARNING TRAJECTORY</div>
-            <h2 className="section-title" style={{ marginTop: 6 }}>Knowledge growth</h2>
-            <div className="chart-shell" style={{ marginTop: 10 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chart}>
-                  <defs>
-                    <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#9B5CFF" stopOpacity=".35" />
-                      <stop offset="100%" stopColor="#9B5CFF" stopOpacity="0" />
-                    </linearGradient>
-                  </defs>
-                  <XAxis dataKey="name" />
-                  <YAxis domain={[30, 80]} />
-                  <Tooltip
-                    contentStyle={{
-                      background: "#1D1033",
-                      border: "1px solid #392052",
-                      borderRadius: 10,
-                      color: "#fff",
-                    }}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="v"
-                    stroke="#9B5CFF"
-                    fill="url(#areaFill)"
-                    strokeWidth={2}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          <div className="card card-pad">
-            <div className="eyebrow">TOPIC MASTERY</div>
-            <h2 className="section-title" style={{ marginTop: 6 }}>Operating Systems</h2>
-            {topics.map((t) => (
-              <div key={t.id} style={{ padding: "15px 0", borderBottom: "1px solid var(--subtle)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10 }}>
-                  <span>{t.name}</span>
-                  <span style={{ color: t.id === "deadlocks" ? "var(--warning)" : "var(--lavender)" }}>
-                    {t.mastery}%
-                  </span>
-                </div>
-                <div className="progress-line" style={{ marginTop: 7 }}>
-                  <span style={{ width: `${t.mastery}%` }} />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div
-          className="card card-pad"
-          style={{ marginTop: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}
-        >
-          <div>
-            <div className="eyebrow">WEAKNESS RECOVERY</div>
-            <h2 className="section-title" style={{ marginTop: 5 }}>
-              Deadlocks <span style={{ color: "var(--muted)", fontSize: 12, marginLeft: 8 }}>42% →</span>{" "}
-              <span style={{ color: "var(--lavender)" }}>68%</span>
-            </h2>
-          </div>
-          <div style={{ color: "var(--success)", fontFamily: "Space Grotesk", fontSize: 24 }}>+26%</div>
-        </div>
+  return <AppShell breadcrumb="PROGRESS"><div className="page">
+    <div className="eyebrow">SAVED LEARNING DATA</div><h1 className="page-title" style={{ marginTop: 8 }}>Your Progress</h1><p className="page-subtitle">Progress updates as ADAPT records assessment answers and practice sessions.</p>
+    {error && <div className="form-error" role="alert" style={{ marginTop: 18 }}>{error}</div>}
+    {!data && !error && <div className="card card-pad" style={{ marginTop: 20 }}>Loading saved progress…</div>}
+    {data && !data.hasLearningHistory && <div className="card card-pad glow" style={{ marginTop: 20 }}><h2 style={{ fontSize: 20 }}>No progress yet.</h2><p className="mini" style={{ marginTop: 7 }}>Complete a course assessment or answer practice questions to begin building your progress history.</p></div>}
+    {data?.hasLearningHistory && <>
+      <div className="grid grid-4" style={{ marginTop: 22 }}>
+        <div className="card metric"><div className="metric-label">OVERALL LEARNING SCORE</div><div className="metric-value">{data.overall.current ?? "—"}{data.overall.current != null ? "%" : ""}</div></div>
+        <div className="card metric"><div className="metric-label">PRACTICE ANSWERS</div><div className="metric-value">{data.statistics.questionsCompleted}</div></div>
+        <div className="card metric"><div className="metric-label">PRACTICE ACCURACY</div><div className="metric-value">{data.statistics.accuracy == null ? "—" : `${data.statistics.accuracy}%`}</div></div>
+        <div className="card metric"><div className="metric-label">PRACTICE TIME</div><div className="metric-value">{data.statistics.learningMinutes} min</div></div>
       </div>
-    </AppShell>
-  );
+      <section className="card card-pad" style={{ marginTop: 16 }}><div className="eyebrow">TOPIC MASTERY</div><div style={{ marginTop: 12, display: "grid", gap: 12 }}>
+        {data.topicProgress.length ? data.topicProgress.map((topic) => <div key={topic.topicId}><div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}><strong>{topic.name}</strong><span>{topic.current}%</span></div><div className="progress-line" style={{ marginTop: 7 }}><span style={{ width: `${topic.current}%` }} /></div><div className="tiny" style={{ marginTop: 5 }}>{topic.attempts} recorded attempts{topic.accuracy != null ? ` · ${topic.accuracy}% accuracy` : ""}</div></div>) : <p className="mini">ADAPT has saved your assessment result. Topic practice history will appear here as you learn.</p>}
+      </div></section>
+      <div className="mini" style={{ marginTop: 12 }}>Completed assessments: {data.statistics.assessmentCount}{data.overall.change != null ? ` · Score change since previous record: ${data.overall.change > 0 ? "+" : ""}${data.overall.change}%` : ""}</div>
+    </>}
+  </div></AppShell>;
 }

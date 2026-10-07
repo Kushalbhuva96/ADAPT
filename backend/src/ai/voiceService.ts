@@ -8,8 +8,8 @@ import {
   AIVoiceResponseJsonSchema,
 } from "../validators/schemas.js";
 
-export async function handleVoiceStart(params: { userId?: string; topicId?: string }) {
-  const { userId = "user_001", topicId = "deadlocks" } = params;
+export async function handleVoiceStart(params: { userId: string; topicId?: string }) {
+  const { userId, topicId = "deadlocks" } = params;
   let session = await VoiceSession.findOne({ userId });
   if (!session) {
     session = new VoiceSession({ id: `voice_${Date.now()}`, userId, topicId, status: "listening", transcript: [] });
@@ -29,8 +29,8 @@ export async function handleVoiceStart(params: { userId?: string; topicId?: stri
   };
 }
 
-export async function handleVoiceMessage(params: { text: string; userId?: string; topicId?: string }) {
-  const { text, userId = "user_001", topicId = "deadlocks" } = params;
+export async function handleVoiceMessage(params: { text: string; userId: string; topicId?: string }) {
+  const { text, userId, topicId = "deadlocks" } = params;
   const learner = await Learner.findOne({ id: userId });
   const level = learner?.currentLevel || "Intermediate";
 

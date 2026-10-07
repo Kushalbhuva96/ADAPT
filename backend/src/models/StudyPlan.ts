@@ -12,6 +12,7 @@ export interface IStudyPlanItem {
 export interface IStudyPlan extends Document {
   id: string;
   userId: string;
+  courseId?: string;
   date: string;
   totalMinutes: number;
   items: IStudyPlanItem[];
@@ -34,6 +35,7 @@ const StudyPlanSchema = new Schema<IStudyPlan>(
   {
     id: { type: String, required: true, unique: true, index: true },
     userId: { type: String, required: true, index: true },
+    courseId: { type: String, index: true },
     date: { type: String, required: true },
     totalMinutes: { type: Number, default: 20 },
     items: { type: [StudyPlanItemSchema], default: [] },

@@ -5,7 +5,7 @@ import { PracticeAnswerSchema } from "../validators/schemas.js";
 export async function getNextPractice(req: Request, res: Response, next: NextFunction) {
   try {
     const paramUserId = req.params.id;
-    const userId = (Array.isArray(paramUserId) ? paramUserId[0] : paramUserId) || "user_001";
+    const userId = (Array.isArray(paramUserId) ? paramUserId[0] : paramUserId) || "";
     const question = await getNextPracticeQuestion(userId);
     res.json(question);
   } catch (error) {

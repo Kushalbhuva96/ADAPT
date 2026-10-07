@@ -14,10 +14,13 @@ import Assessment from "./pages/Assessment";
 import VoiceQuiz from "./pages/VoiceQuiz";
 import HackathonLab from "./pages/HackathonLab";
 import Course from "./pages/Course";
+import { useAuth } from "./services/AuthContext";
 
 function RequireAuth({ children }) {
   const location = useLocation();
-  if (!localStorage.getItem("adapt_token")) {
+  const { user, checking } = useAuth();
+  if (checking) return <div className="page" role="status">Checking your session…</div>;
+  if (!user) {
     const next = `${location.pathname}${location.search}`;
     return <Navigate to={`/onboarding?mode=signin&next=${encodeURIComponent(next)}`} replace />;
   }
@@ -30,6 +33,7 @@ export default function App() {
     <Route path="/onboarding" element={<Onboarding/>}/>
     <Route path="/assessment" element={<RequireAuth><Assessment/></RequireAuth>}/>
     <Route path="/course" element={<RequireAuth><Course/></RequireAuth>}/>
+    <Route path="/courses" element={<RequireAuth><Course/></RequireAuth>}/>
     <Route path="/dashboard" element={<RequireAuth><Dashboard/></RequireAuth>}/>
     <Route path="/lab" element={<RequireAuth><HackathonLab/></RequireAuth>}/>
     <Route path="/learning-dna" element={<RequireAuth><LearningDNA/></RequireAuth>}/>

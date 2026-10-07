@@ -9,6 +9,8 @@ export interface ICourseTopic {
   accuracy: number;
   attempts: number;
   status: "not_started" | "in_progress" | "improving" | "needs_attention" | "mastered";
+  learningState: "LOCKED" | "ASSESSMENT_REQUIRED" | "ASSESSMENT_IN_PROGRESS" | "UNLOCKED" | "LEARNING" | "NEEDS_IMPROVEMENT" | "STRONG";
+  unlockedAt?: Date;
   difficulty: "easy" | "medium" | "hard";
   learningObjectives?: string[];
   subtopics?: string[];
@@ -62,6 +64,12 @@ const CourseTopicSchema = new Schema<ICourseTopic>(
       enum: ["not_started", "in_progress", "improving", "needs_attention", "mastered"],
       default: "not_started",
     },
+    learningState: {
+      type: String,
+      enum: ["LOCKED", "ASSESSMENT_REQUIRED", "ASSESSMENT_IN_PROGRESS", "UNLOCKED", "LEARNING", "NEEDS_IMPROVEMENT", "STRONG"],
+      default: "LOCKED",
+    },
+    unlockedAt: { type: Date, default: null },
     difficulty: { type: String, enum: ["easy", "medium", "hard"], default: "medium" },
     learningObjectives: { type: [String], default: [] },
     subtopics: { type: [String], default: [] },

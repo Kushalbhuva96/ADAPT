@@ -118,6 +118,7 @@ export const AIVoiceQuizResponseJsonSchema = jsonObject({
 export const DiagnosticSubmissionSchema = z.object({
   subjectId: z.string(),
   courseId: z.string(),
+  assessmentId: z.string().optional(),
   userId: z.string().optional(),
   answers: z.array(
     z.object({

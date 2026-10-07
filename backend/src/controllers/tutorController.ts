@@ -16,7 +16,7 @@ export async function sendTutorMessage(req: Request, res: Response, next: NextFu
 export async function getRecommendations(req: Request, res: Response, next: NextFunction) {
   try {
     const paramUserId = req.params.id;
-    const userId = (Array.isArray(paramUserId) ? paramUserId[0] : paramUserId) || "user_001";
+    const userId = (Array.isArray(paramUserId) ? paramUserId[0] : paramUserId) || "";
     const list = await Recommendation.find({ userId }).sort({ createdAt: -1 }).limit(5);
     res.json(list);
   } catch (error) {

@@ -4,7 +4,7 @@ import { Course, ICourseTopic } from "../models/Course.js";
 
 export async function generateCourseFromAI(
   learningRequest: string,
-  userId: string = "user_001"
+  userId: string
 ) {
   const systemPrompt = `You are the master curriculum architect for ADAPT, an adaptive AI learning companion.
 The student will provide a learning goal or request in natural language.
@@ -67,6 +67,7 @@ REQUIREMENTS:
     mastery: 0,
     accuracy: 0,
     attempts: 0,
+    learningState: "LOCKED",
     status: "not_started",
     difficulty: t.difficulty as any,
     learningObjectives: t.learningObjectives,

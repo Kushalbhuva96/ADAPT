@@ -3,15 +3,33 @@ import { Course } from "../models/Course.js";
 import { Learner } from "../models/Learner.js";
 import { PracticeAttempt } from "../models/PracticeAttempt.js";
 import { Progress } from "../models/Progress.js";
+import { AssessmentAttempt } from "../models/AssessmentAttempt.js";
 import { generateStructuredAIResponse } from "./aiClient.js";
 import { AIDiagnosticQuestionJsonSchema, AIDiagnosticQuestionSchema } from "../validators/schemas.js";
 
-export async function getNextPracticeQuestion(userId: string = "user_001") {
-  const learner = await Learner.findOne({ id: userId });
-  const activeCourseId = learner?.activeCourseId;
-  const course = activeCourseId ? await Course.findOne({ id: activeCourseId }) : await Course.findOne().sort({ createdAt: -1 });
+const TOPIC_LEARNING_STATES = ["UNLOCKED", "LEARNING", "NEEDS_IMPROVEMENT", "STRONG"];
 
-  const recentAttempts = await PracticeAttempt.find({ userId }).sort({ createdAt: -1 }).limit(8);
+export async function getNextPracticeQuestion(userId: string) {
+  const learner = await Learner.findOne({ id: userId });
+  if (!learner) throw Object.assign(new Error("Learner not found."), { status: 404, code: "LEARNER_NOT_FOUND" });
+  let activeCourseId = learner.activeCourseId;
+  if (!activeCourseId) {
+    const latestCourse = await Course.findOne({ userId }).sort({ updatedAt: -1 });
+    if (latestCourse) {
+      learner.activeCourseId = latestCourse.id;
+      learner.activeTopicId = latestCourse.activeTopicId || latestCourse.recommendedTopicId || null;
+      await learner.save();
+      activeCourseId = latestCourse.id;
+    }
+  }
+  if (!activeCourseId) throw Object.assign(new Error("Create a course before starting adaptive practice."), { status: 409, code: "COURSE_REQUIRED" });
+  const course = await Course.findOne({ id: activeCourseId, userId });
+  if (!course) throw Object.assign(new Error("Current course not found."), { status: 404, code: "COURSE_NOT_FOUND" });
+  if (!course.topics.length) throw Object.assign(new Error("Current course has no topics to practice."), { status: 409, code: "COURSE_TOPICS_REQUIRED" });
+  const completedAssessment = await AssessmentAttempt.findOne({ userId, courseId: course.id, result: { $exists: true } });
+  if (!completedAssessment) throw Object.assign(new Error("Complete this course's level assessment before starting a targeted challenge."), { status: 409, code: "COURSE_ASSESSMENT_REQUIRED" });
+
+  const recentAttempts = await PracticeAttempt.find({ userId, courseId: course.id }).sort({ createdAt: -1 }).limit(8);
   const recentAccuracy = recentAttempts.length
     ? Math.round((recentAttempts.filter((attempt) => attempt.correct).length / recentAttempts.length) * 100)
     : null;
@@ -20,8 +38,11 @@ export async function getNextPracticeQuestion(userId: string = "user_001") {
     learner?.activeTopicId ||
     course?.activeTopicId ||
     course?.recommendedTopicId ||
-    course?.topics?.[0]?.id ||
-    "topic_default";
+    course.topics[0].id;
+  const requestedTopic = course.topics.find((topic) => topic.id === requestedTopicId);
+  if (requestedTopic && !TOPIC_LEARNING_STATES.includes(requestedTopic.learningState || "")) {
+    throw Object.assign(new Error("Complete this topic's diagnostic assessment before starting its practice."), { status: 409, code: "TOPIC_ASSESSMENT_REQUIRED" });
+  }
 
   // Recent mistakes take priority for reinforcement. After a strong streak, advance through course order.
   let activeTopicId = requestedTopicId;
@@ -31,24 +52,17 @@ export async function getNextPracticeQuestion(userId: string = "user_001") {
     const currentIndex = course.topics.findIndex((topic) => topic.id === requestedTopicId);
     const nextTopic = course.topics.slice(Math.max(currentIndex + 1, 0)).find((topic) => {
       const mastery = learner?.topicMastery?.find((entry) => entry.topicId === topic.id)?.score ?? topic.mastery ?? 0;
-      return mastery < 80 && !course.completedTopicIds?.includes(topic.id);
+      return TOPIC_LEARNING_STATES.includes(topic.learningState || "") && mastery < 80 && !course.completedTopicIds?.includes(topic.id);
     });
     if (nextTopic) activeTopicId = nextTopic.id;
   }
 
-  const currentTopic = course?.topics?.find((t) => t.id === activeTopicId) || {
-    id: activeTopicId,
-    name: "Core Concept",
-    description: "",
-    learningObjectives: [],
-    accuracy: 45,
-    mastery: 40,
-    difficulty: "medium",
-  };
+  const currentTopic = course.topics.find((t) => t.id === activeTopicId);
+  if (!currentTopic) throw Object.assign(new Error("Current topic does not belong to the active course."), { status: 409, code: "TOPIC_NOT_IN_COURSE" });
 
   const masteryObj = learner?.topicMastery?.find((m) => m.topicId === activeTopicId);
-  const topicMastery = masteryObj?.score ?? currentTopic.mastery ?? 45;
-  const topicAccuracy = masteryObj?.accuracy ?? currentTopic.accuracy ?? 50;
+  const topicMastery = masteryObj?.score ?? currentTopic.mastery ?? 0;
+  const topicAccuracy = masteryObj?.accuracy ?? currentTopic.accuracy ?? 0;
   const recentTopicAttempts = recentAttempts.filter((attempt) => attempt.topicId === activeTopicId);
   const recentTopicAccuracy = recentTopicAttempts.length
     ? Math.round((recentTopicAttempts.filter((attempt) => attempt.correct).length / recentTopicAttempts.length) * 100)
@@ -67,6 +81,7 @@ export async function getNextPracticeQuestion(userId: string = "user_001") {
 
   // Prefer a question not recently answered, at the difficulty supported by the learner's recent results.
   const availableQuestions = await Question.find({
+    courseId: course.id,
     topicId: activeTopicId,
     type: "practice",
     id: { $nin: recentQuestionIds },
@@ -96,7 +111,7 @@ Format strictly as JSON:
   "conceptTested": "Key concept"
 }`;
 
-      const userPrompt = `Course: "${course?.title || "Personal learning"}". Learning request: "${course?.learningRequest || ""}". Topic: "${currentTopic.name}". Description: "${currentTopic.description || ""}". Objectives: ${(currentTopic.learningObjectives || []).join("; ")}. Learner topic mastery: ${topicMastery}%. Recent topic accuracy: ${recentTopicAccuracy}%. Difficulty target: ${targetDifficulty}. Concepts from previous mistakes to reinforce: ${missedConcepts.join("; ") || "No prior mistakes recorded"}.`;
+      const userPrompt = `Course: "${course.title}". Learning request: "${course.learningRequest}". Topic: "${currentTopic.name}". Description: "${currentTopic.description || ""}". Objectives: ${(currentTopic.learningObjectives || []).join("; ")}. Learner topic mastery: ${topicMastery}%. Recent topic accuracy: ${recentTopicAccuracy}%. Difficulty target: ${targetDifficulty}. Concepts from previous mistakes to reinforce: ${missedConcepts.join("; ") || "No prior mistakes recorded"}.`;
 
       const aiQuestion = await generateStructuredAIResponse(
         systemPrompt,
@@ -107,8 +122,8 @@ Format strictly as JSON:
 
       qDoc = new Question({
         id: `practice_${activeTopicId}_${Date.now()}`,
-        courseId: course?.id || null,
-        subjectId: course?.subject?.id || "subject",
+        courseId: course.id,
+        subjectId: course.subject.id,
         topicId: activeTopicId,
         difficulty: aiQuestion.difficulty,
         question: aiQuestion.question,
@@ -123,26 +138,29 @@ Format strictly as JSON:
   }
 
   const strategy = topicMastery < 50 ? "foundation_first" : "example_first";
-  const reason =
-    topicMastery < 50
-      ? "Your recent accuracy indicates this concept needs reinforcement."
-      : "You have strong baseline comprehension; advancing to real-world application.";
+  const selectionReason = lastAttempt && !lastAttempt.correct
+    ? `Your last response showed a gap in ${missedConcepts[0] || currentTopic.name}; this question reinforces that concept.`
+    : recentTopicAttempts.length
+      ? `Your recent practice accuracy is ${recentTopicAccuracy}% in ${currentTopic.name}; this question targets ${targetDifficulty} difficulty.`
+      : currentTopic.attempts > 0
+        ? `Your course assessment identified ${currentTopic.name} as a useful starting area; this is your first practice challenge.`
+        : `This is your first practice challenge in ${currentTopic.name}; ADAPT is establishing a baseline.`;
 
   return {
     id: qDoc.id,
+    courseId: course.id,
     topicId: qDoc.topicId,
+    topicName: currentTopic.name,
+    title: `${currentTopic.name} Challenge`,
     difficulty: qDoc.difficulty,
     question: qDoc.question,
     options: qDoc.options,
     adaptiveContext: {
-      accuracy: recentTopicAccuracy,
-      topicMastery: topicMastery,
+      accuracy: recentTopicAttempts.length ? recentTopicAccuracy : currentTopic.attempts > 0 ? topicAccuracy : null,
+      topicMastery: masteryObj?.attempts || currentTopic.attempts > 0 ? topicMastery : null,
+      practiceAttempts: recentTopicAttempts.length,
       recentAccuracy,
-      reason: lastAttempt && !lastAttempt.correct
-        ? `Your last response showed a gap in ${missedConcepts[0] || currentTopic.name}; this question reinforces that concept.`
-        : recentAccuracy !== null && recentAccuracy >= 80
-          ? `Your recent accuracy is ${recentAccuracy}%; the sequence advances to ${currentTopic.name}.`
-          : `Current topic mastery is ${topicMastery}% with ${recentTopicAccuracy}% recent accuracy; this question targets ${targetDifficulty} difficulty.`,
+      reason: selectionReason,
       strategy: missedConcepts.length ? "mistake_reinforcement" : strategy,
     },
   };
@@ -154,7 +172,8 @@ export async function submitPracticeAnswer(params: {
   timeTakenSeconds?: number;
   userId?: string;
 }) {
-  const { questionId, selectedOptionId, timeTakenSeconds = 15, userId = "user_001" } = params;
+  const { questionId, selectedOptionId, timeTakenSeconds = 15, userId } = params;
+  if (!userId) throw Object.assign(new Error("A learner account is required."), { status: 401, code: "LEARNER_REQUIRED" });
 
   // Authoritatively evaluate against question in MongoDB
   const qDoc = await Question.findOne({ id: questionId });
@@ -168,22 +187,29 @@ export async function submitPracticeAnswer(params: {
   const explanation = qDoc.explanation;
   const isCorrect = correctOptionId === selectedOptionId;
   const topicId = qDoc.topicId;
-  const recentTopicAttempts = await PracticeAttempt.find({ userId, topicId }).sort({ createdAt: -1 }).limit(4);
+  const learner = await Learner.findOne({ id: userId });
+  if (!learner) throw Object.assign(new Error("Learner not found."), { status: 404, code: "LEARNER_NOT_FOUND" });
+  const course = qDoc.courseId ? await Course.findOne({ id: qDoc.courseId, userId }) : null;
+  if (!course) throw Object.assign(new Error("Question does not belong to one of your courses."), { status: 403, code: "QUESTION_NOT_OWNED" });
+  const courseTopic = course.topics.find((topic) => topic.id === topicId);
+  if (!courseTopic || !TOPIC_LEARNING_STATES.includes(courseTopic.learningState || "")) {
+    throw Object.assign(new Error("Complete this topic's diagnostic assessment before starting its practice."), { status: 409, code: "TOPIC_ASSESSMENT_REQUIRED" });
+  }
+  const recentTopicAttempts = await PracticeAttempt.find({ userId, topicId, courseId: course.id }).sort({ createdAt: -1 }).limit(4);
 
   // Update learner mastery
-  let learner = await Learner.findOne({ id: userId });
-  if (!learner) {
-    learner = new Learner({ id: userId, name: "Alex", email: "alex@example.com" });
-  }
-
   const existingIdx = learner.topicMastery.findIndex((m) => m.topicId === topicId);
-  const previousMastery = existingIdx >= 0 ? learner.topicMastery[existingIdx].score : 45;
+  const previousMastery = existingIdx >= 0 ? learner.topicMastery[existingIdx].score : courseTopic?.mastery ?? 0;
+  const previousOverall = learner.overallScore;
   const change = isCorrect ? 4 : -2;
   const currentMastery = Math.max(0, Math.min(100, previousMastery + change));
 
   if (existingIdx >= 0) {
+    const existing = learner.topicMastery[existingIdx];
+    const priorAttempts = existing.attempts;
     learner.topicMastery[existingIdx].score = currentMastery;
     learner.topicMastery[existingIdx].attempts += 1;
+    learner.topicMastery[existingIdx].accuracy = Math.round(((existing.accuracy * priorAttempts) + (isCorrect ? 100 : 0)) / (priorAttempts + 1));
     if (isCorrect) learner.topicMastery[existingIdx].correctAnswers += 1;
     else learner.topicMastery[existingIdx].incorrectAnswers += 1;
     learner.topicMastery[existingIdx].lastAssessed = new Date();
@@ -199,11 +225,17 @@ export async function submitPracticeAnswer(params: {
     });
   }
 
-  learner.overallScore = Math.max(0, Math.min(100, learner.overallScore + (isCorrect ? 1 : 0)));
+  const [previousPracticeAttempts, diagnosticAttempts] = await Promise.all([
+    PracticeAttempt.find({ userId }),
+    AssessmentAttempt.find({ userId, result: { $exists: true } }),
+  ]);
+  const diagnosticAnswers = diagnosticAttempts.flatMap((attempt) => attempt.answers);
+  const overallCorrect = diagnosticAnswers.filter((answer) => answer.correct).length + previousPracticeAttempts.filter((attempt) => attempt.correct).length + (isCorrect ? 1 : 0);
+  const overallCount = diagnosticAnswers.length + previousPracticeAttempts.length + 1;
+  learner.overallScore = Math.round((overallCorrect / overallCount) * 100);
   await learner.save();
 
-  const course = qDoc.courseId ? await Course.findOne({ id: qDoc.courseId }) : null;
-  if (course) {
+  {
     const topic = course.topics.find((item) => item.id === topicId);
     if (topic) {
       const priorCount = topic.attempts || 0;
@@ -211,7 +243,12 @@ export async function submitPracticeAnswer(params: {
       topic.accuracy = Math.round(((topic.accuracy || 0) * priorCount + (isCorrect ? 100 : 0)) / topic.attempts);
       topic.mastery = currentMastery;
       topic.status = currentMastery >= 80 ? "mastered" : currentMastery >= 60 ? "improving" : "needs_attention";
+      topic.learningState = currentMastery >= 80 ? "STRONG" : currentMastery < 60 ? "NEEDS_IMPROVEMENT" : "LEARNING";
+      topic.unlockedAt ||= new Date();
       course.topicAttempts = { ...course.topicAttempts, [topicId]: (course.topicAttempts?.[topicId] || 0) + 1 };
+      course.completedTopicIds = course.topics.filter((item) => item.mastery >= 80).map((item) => item.id);
+      course.subject.completedTopics = course.completedTopicIds.length;
+      course.progress = course.topics.length ? Math.round((course.completedTopicIds.length / course.topics.length) * 100) : 0;
 
       const recentWithCurrent = [isCorrect, ...recentTopicAttempts.map((attempt) => attempt.correct)];
       const recentAccuracy = recentWithCurrent.length
@@ -223,34 +260,48 @@ export async function submitPracticeAnswer(params: {
       } else {
         const topicIndex = course.topics.findIndex((item) => item.id === topicId);
         const nextTopic = course.topics.slice(topicIndex + 1).find((item) =>
-          item.mastery < 80 && !course.completedTopicIds.includes(item.id)
+          TOPIC_LEARNING_STATES.includes(item.learningState || "") && item.mastery < 80 && !course.completedTopicIds.includes(item.id)
         );
         if (nextTopic) {
           course.activeTopicId = nextTopic.id;
           course.recommendedTopicId = nextTopic.id;
         }
       }
+      learner.activeCourseId = course.id;
+      learner.activeTopicId = course.activeTopicId || topicId;
+      await learner.save();
       await course.save();
     }
   }
 
   // Update progress in MongoDB
   let progress = await Progress.findOne({ userId });
+  const totalAttempts = previousPracticeAttempts.length + 1;
+  const accuracy = Math.round((overallCorrect / overallCount) * 100);
   if (!progress) {
     progress = new Progress({
       userId,
-      overall: { current: currentMastery, previous: previousMastery, change },
-      statistics: { questionsCompleted: 1, learningMinutes: 5, streakDays: 1, accuracy: isCorrect ? 100 : 0 },
+      overall: { current: learner.overallScore, previous: previousOverall, change: learner.overallScore - previousOverall },
+      topicProgress: [],
+      statistics: { questionsCompleted: 1, learningMinutes: timeTakenSeconds / 60, streakDays: 0, accuracy },
     });
   } else {
-    progress.overall.previous = progress.overall.current;
-    progress.overall.current = currentMastery;
-    progress.overall.change = currentMastery - progress.overall.previous;
+    progress.overall.previous = previousOverall;
+    progress.overall.current = learner.overallScore;
+    progress.overall.change = learner.overallScore - previousOverall;
     progress.statistics.questionsCompleted += 1;
-    progress.statistics.learningMinutes += 2;
-    const currentAcc = progress.statistics.accuracy || 50;
-    progress.statistics.accuracy = Math.round((currentAcc * 9 + (isCorrect ? 100 : 0)) / 10);
+    progress.statistics.learningMinutes += timeTakenSeconds / 60;
+    progress.statistics.accuracy = accuracy;
   }
+  const existingProgress = progress.topicProgress.find((item) => item.topicId === topicId);
+  if (existingProgress) {
+    existingProgress.previous = existingProgress.current;
+    existingProgress.current = currentMastery;
+    existingProgress.change = currentMastery - existingProgress.previous;
+  } else {
+    progress.topicProgress.push({ topicId, name: courseTopic?.name || topicId, previous: previousMastery, current: currentMastery, change });
+  }
+  progress.statistics.questionsCompleted = totalAttempts;
   await progress.save();
 
   // Save practice attempt in MongoDB

@@ -1,140 +1,36 @@
-import React from "react";
-import { ArrowRight, CircleDot, Sparkles } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { ArrowRight, BrainCircuit } from "lucide-react";
+import { Link } from "react-router-dom";
 import AppShell from "../components/layout/AppShell";
-import Insight from "../components/ui/Insight";
-import { learningProfile } from "../data/mock";
+import { api } from "../services/api";
 
 export default function LearningDNA() {
-  const p = learningProfile;
-  const behaviors = [
-    ["Concept Understanding", p.learningBehavior.conceptUnderstanding],
-    ["Application", p.learningBehavior.application],
-    ["Recall", p.learningBehavior.recall],
-    ["Problem Solving", p.learningBehavior.problemSolving],
-  ];
-
-  const missionSteps = [
-    ["Review Deadlock Conditions", 5],
-    ["Learn Banker's Algorithm", 8],
-    ["Practice 3 Questions", 5],
-    ["Quick Recall", 2],
-  ];
-
-  return (
-    <AppShell breadcrumb="LEARN">
-      <div className="page">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "end" }}>
-          <div>
-            <div className="eyebrow">PERSONAL INTELLIGENCE MODEL</div>
-            <h1 className="page-title" style={{ marginTop: 8 }}>Your Learning DNA</h1>
-            <p className="page-subtitle">
-              ADAPT learns how you learn — then rebuilds the path around you.
-            </p>
-          </div>
-          <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}><span className="badge">ADAPTIVE LEVEL · MEDIUM</span><a href="/lab" className="btn"><Sparkles size={13}/> Explore Learning Twin</a></div>
-        </div>
-
-        <div className="grid grid-2" style={{ marginTop: 24 }}>
-          <div className="card card-pad knowledge-map">
-            <div className="eyebrow">KNOWLEDGE MAP</div>
-            <div className="mini">Operating Systems · Live model</div>
-
-            <div className="map-center">
-              <div style={{ textAlign: "center" }}>
-                <CircleDot size={18} color="#C8A8FF" />
-                <div className="tiny">LEARNING<br />CORE</div>
-              </div>
-            </div>
-
-            <div className="map-line l1" />
-            <div className="map-line l2" />
-            <div className="map-line l3" />
-            <div className="map-line l4" />
-
-            <div className="map-node mn1"><span>82%</span><small>Processes</small></div>
-            <div className="map-node mn2"><span>74%</span><small>Scheduling</small></div>
-            <div className="map-node mn3"><span>58%</span><small>Synchronization</small></div>
-            <div className="map-node mn4"><span>63%</span><small>Memory</small></div>
-            <div className="map-node mn5"><span>42%</span><small>Deadlocks</small></div>
-          </div>
-
-          <div>
-            <div className="card card-pad">
-              <div className="eyebrow">LEARNING BEHAVIOR</div>
-              <h2 className="section-title" style={{ marginTop: 7 }}>
-                How your mind is responding
-              </h2>
-
-              {behaviors.map(([label, value]) => (
-                <div className="behavior-row" key={label}>
-                  <div className="behavior-head">
-                    <span>{label}</span>
-                    <span>{value}%</span>
-                  </div>
-                  <div className="progress-line">
-                    <span style={{ width: `${value}%` }} />
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div style={{ marginTop: 14 }}>
-              <Insight title="AI OBSERVATION">
-                {p.learningBehavior.conceptUnderstanding > p.learningBehavior.application
-                  ? "Your accuracy is high on conceptual questions but drops on application-based problems."
-                  : "ADAPT is balancing your next practice set."}
-              </Insight>
-            </div>
-          </div>
-        </div>
-
-        <div style={{ marginTop: 28 }}>
-          <div className="eyebrow">LEARNING PREFERENCES</div>
-          <h2 className="section-title" style={{ marginTop: 7 }}>
-            Your highest-response patterns
-          </h2>
-        </div>
-
-        <div className="grid grid-3" style={{ marginTop: 12 }}>
-          {["Real-world examples", "Short explanations", "Practice first"].map((item, index) => (
-            <div className="card card-pad card-hover" key={item}>
-              <div className="tiny">0{index + 1}</div>
-              <h3 style={{ fontSize: 12, marginTop: 8 }}>{item}</h3>
-              <div className="mini" style={{ marginTop: 6 }}>
-                {index === 0 ? "Strongest response signal" : "Observed in recent sessions"}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="card card-pad" style={{ marginTop: 18 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div>
-              <div className="eyebrow">TODAY'S AI LEARNING MISSION</div>
-              <h2 className="section-title" style={{ marginTop: 7 }}>Deadlock recovery sprint</h2>
-            </div>
-            <div style={{ fontFamily: "Space Grotesk", fontSize: 28 }}>
-              20<span className="mini"> MINUTES</span>
-            </div>
-          </div>
-
-          <div className="timeline">
-            <div className="timeline-grid">
-              {missionSteps.map(([title, minutes], index) => (
-                <div key={title}>
-                  <div className="step-dot">{String(index + 1).padStart(2, "0")}</div>
-                  <div style={{ fontSize: 9 }}>{title}</div>
-                  <div className="mini">{minutes} min</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <a href="/practice" className="btn btn-primary" style={{ float: "right", marginTop: 8 }}>
-            Start Mission <ArrowRight size={13} />
-          </a>
-        </div>
+  const [profile, setProfile] = useState(null);
+  const [error, setError] = useState("");
+  useEffect(() => { api.profile().then(setProfile).catch((err) => setError(err.message)); }, []);
+  return <AppShell breadcrumb="LEARNING DNA"><div className="page">
+    <div className="eyebrow">PERSONAL LEARNING MODEL</div><h1 className="page-title" style={{ marginTop: 8 }}>Your Learning DNA</h1><p className="page-subtitle">ADAPT builds this profile from your course assessment and saved practice history.</p>
+    {error && <div className="form-error" role="alert" style={{ marginTop: 18 }}>{error}</div>}
+    {!profile && !error && <div className="card card-pad" style={{ marginTop: 20 }}>Loading your learner model…</div>}
+    {profile && !profile.hasLearningData && <div className="card card-pad glow" style={{ marginTop: 20 }}><BrainCircuit size={22} color="var(--lavender)" /><h2 style={{ fontSize: 20, marginTop: 12 }}>Your Learning DNA is forming.</h2><p className="mini" style={{ marginTop: 7 }}>Complete your first assessment and practice sessions to build your learner model. No learning pattern has been inferred yet.</p><Link className="btn btn-primary" style={{ marginTop: 14 }} to={profile.course ? "/assessment" : "/course"}>{profile.course ? "Take Level Assessment" : "Open Course"} <ArrowRight size={14} /></Link></div>}
+    {profile?.hasLearningData && <>
+      <div className="grid grid-2" style={{ marginTop: 22 }}>
+        <section className="card card-pad"><div className="eyebrow">CURRENT LEARNER STATE</div><h2 className="section-title" style={{ marginTop: 7 }}>{profile.course?.title || "Learning profile"}</h2><div className="mini" style={{ marginTop: 8 }}>Level: {profile.assessment?.level || profile.adaptiveLevel || "Still forming"}</div>{profile.assessment && <><div className="mini" style={{ marginTop: 6 }}>Assessment result: {profile.assessment.accuracy}% across {profile.assessment.total} questions</div><div className="mini" style={{ marginTop: 8 }}>Strengths: {profile.assessment.strengths.length ? profile.assessment.strengths.join(", ") : "No clear strengths identified yet"}</div><div className="mini" style={{ marginTop: 5 }}>Areas to work on: {profile.assessment.weaknesses.length ? profile.assessment.weaknesses.join(", ") : "No assessed gaps"}</div></>}</section>
+        <section className="card card-pad"><div className="eyebrow">LEARNING SIGNALS</div><h2 className="section-title" style={{ marginTop: 7 }}>Observed activity</h2><div className="mini" style={{ marginTop: 9 }}>Practice attempts: {profile.practiceAttempts}</div><div className="mini" style={{ marginTop: 6 }}>Saved course: {profile.course?.title || "No active course"}</div><p className="mini" style={{ marginTop: 10, lineHeight: 1.6 }}>ADAPT will only show behavior patterns when the saved learning history supports them.</p></section>
       </div>
-    </AppShell>
-  );
+      <section className="card card-pad dna-flow" aria-label="How learning activity informs your personalized learning">
+        <div className="eyebrow">HOW YOUR MODEL GUIDES LEARNING</div>
+        <div className="dna-flow-track">
+          <div className="dna-flow-node"><span className="dna-flow-icon"><BrainCircuit size={17}/></span><strong>Your learning data</strong><span>{profile.assessment ? `${profile.assessment.total} assessment answers` : `${profile.practiceAttempts} practice attempts`}</span></div>
+          <div className="dna-flow-link" aria-hidden="true"><i/><i/><i/></div>
+          <div className="dna-flow-node"><span className="dna-flow-icon"><span className="dna-flow-pulse"/></span><strong>Observed patterns</strong><span>{profile.assessment ? `${profile.assessment.accuracy}% assessment accuracy` : `${profile.practiceAttempts} saved practice attempts`}</span></div>
+          <div className="dna-flow-link" aria-hidden="true"><i/><i/><i/></div>
+          <div className="dna-flow-node"><span className="dna-flow-icon"><ArrowRight size={17}/></span><strong>Adapted next step</strong><span>{profile.assessment?.recommendedTopic || profile.course?.title || "Build more learning history"}</span></div>
+        </div>
+        <p className="tiny" style={{ marginTop: 14 }}>The model reflects saved assessment and practice records. It does not infer a pattern when the history is too small.</p>
+      </section>
+      <section className="card card-pad" style={{ marginTop: 16 }}><div className="eyebrow">COURSE KNOWLEDGE MAP</div><h2 className="section-title" style={{ marginTop: 7 }}>{profile.course?.title || "Current course"}</h2><div style={{ marginTop: 12, display: "grid", gap: 13 }}>{profile.topicMastery.map((topic) => <div key={topic.topicId}><div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}><strong>{topic.topicName}</strong><span>{topic.score == null ? "Not assessed" : `${topic.score}%`}</span></div><div className="progress-line" style={{ marginTop: 7 }}><span style={{ width: `${topic.score ?? 0}%` }} /></div>{topic.attempts > 0 && <div className="tiny" style={{ marginTop: 5 }}>{topic.attempts} recorded attempts · {topic.accuracy}% accuracy</div>}</div>)}</div></section>
+      <div className="grid grid-2" style={{ marginTop: 16 }}><Link className="card card-pad" to="/progress"><div className="eyebrow">PROGRESS</div><div style={{ marginTop: 7 }}>Review saved results <ArrowRight size={13} /></div></Link><Link className="card card-pad" to="/study-plan"><div className="eyebrow">STUDY PLAN</div><div style={{ marginTop: 7 }}>Open your current plan <ArrowRight size={13} /></div></Link></div>
+    </>}
+  </div></AppShell>;
 }

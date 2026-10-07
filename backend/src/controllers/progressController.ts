@@ -1,37 +1,52 @@
 import { Request, Response, NextFunction } from "express";
 import { Progress } from "../models/Progress.js";
 import { Learner } from "../models/Learner.js";
+import { PracticeAttempt } from "../models/PracticeAttempt.js";
+import { AssessmentAttempt } from "../models/AssessmentAttempt.js";
 
 export async function getProgress(req: Request, res: Response, next: NextFunction) {
   try {
-    const userId = req.params.id || "user_001";
-    let progress = await Progress.findOne({ userId });
+    const userId = req.params.id;
+    const [learner, storedProgress, practiceAttempts, assessments] = await Promise.all([
+      Learner.findOne({ id: userId }),
+      Progress.findOne({ userId }),
+      PracticeAttempt.find({ userId }).sort({ createdAt: 1 }),
+      AssessmentAttempt.find({ userId, result: { $exists: true } }).sort({ createdAt: -1 }),
+    ]);
+    if (!learner) return res.status(404).json({ message: "Learner not found." });
 
-    if (!progress) {
-      const learner = await Learner.findOne({ id: userId });
-      const overall = learner?.overallScore || 67;
+    const correct = practiceAttempts.filter((attempt) => attempt.correct).length;
+    const accuracy = practiceAttempts.length ? Math.round((correct / practiceAttempts.length) * 100) : null;
+    const learningMinutes = Math.round(practiceAttempts.reduce((sum, attempt) => sum + (attempt.timeTakenSeconds || 0), 0) / 60);
+    const topicProgress = learner.topicMastery
+      .filter((item) => item.attempts > 0)
+      .map((item) => ({
+        topicId: item.topicId,
+        name: item.topicName || item.topicId,
+        previous: null,
+        current: item.score,
+        change: null,
+        accuracy: item.accuracy,
+        attempts: item.attempts,
+      }));
 
-      progress = new Progress({
-        userId,
-        overall: { current: overall, previous: Math.max(20, overall - 18), change: 18 },
-        topicProgress: (learner?.topicMastery || []).map((m) => ({
-          topicId: m.topicId,
-          name: m.topicName || m.topicId,
-          previous: Math.max(10, m.score - 15),
-          current: m.score,
-          change: 15,
-        })),
-        statistics: {
-          questionsCompleted: 24,
-          learningMinutes: 120,
-          streakDays: 4,
-          accuracy: 78,
-        },
-      });
-      await progress.save();
-    }
-
-    res.json(progress);
+    res.json({
+      userId,
+      overall: {
+        current: assessments.length || practiceAttempts.length ? learner.overallScore : null,
+        previous: storedProgress?.overall?.previous ?? null,
+        change: storedProgress?.overall?.change ?? null,
+      },
+      topicProgress,
+      statistics: {
+        questionsCompleted: practiceAttempts.length,
+        learningMinutes,
+        streakDays: storedProgress?.statistics?.streakDays ?? null,
+        accuracy,
+        assessmentCount: assessments.length,
+      },
+      hasLearningHistory: assessments.length > 0 || practiceAttempts.length > 0,
+    });
   } catch (error) {
     next(error);
   }
@@ -39,15 +54,9 @@ export async function getProgress(req: Request, res: Response, next: NextFunctio
 
 export async function syncOffline(req: Request, res: Response, next: NextFunction) {
   try {
-    const userId = req.params.id || "user_001";
+    const userId = req.params.id;
     console.log(`[Sync] Received offline sync queue for user: ${userId}`);
-
-    // Idempotent sync acknowledgment
-    res.json({
-      status: "synced",
-      pendingSyncCount: 0,
-      lastSyncedAt: new Date().toISOString(),
-    });
+    res.json({ status: "synced", pendingSyncCount: 0, lastSyncedAt: new Date().toISOString() });
   } catch (error) {
     next(error);
   }

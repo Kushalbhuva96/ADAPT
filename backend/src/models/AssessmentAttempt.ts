@@ -39,8 +39,12 @@ export interface IAssessmentAttempt extends Document {
   userId: string;
   courseId: string;
   subjectId: string;
+  topicId?: string;
+  status: "IN_PROGRESS" | "COMPLETED";
+  questionIds: string[];
   answers: ISubmittedAnswer[];
-  result: IAssessmentResult;
+  pendingAnswers: Array<{ questionId: string; selectedAnswer: string }>;
+  result?: IAssessmentResult;
   createdAt: Date;
 }
 
@@ -68,28 +72,37 @@ const TopicPerformanceSchema = new Schema<ITopicPerformance>(
   { _id: false }
 );
 
+const AssessmentResultSchema = new Schema<IAssessmentResult>(
+  {
+    subject: {
+      id: { type: String, required: true },
+      name: { type: String, required: true },
+    },
+    level: { type: String, required: true },
+    accuracy: { type: Number, required: true },
+    total: { type: Number, required: true },
+    topicPerformance: { type: [TopicPerformanceSchema], default: [] },
+    strengths: { type: [String], default: [] },
+    weaknesses: { type: [String], default: [] },
+    recommendedTopicId: { type: String, required: true },
+    recommendedTopic: { type: String, required: true },
+    explanation: { type: String, required: true },
+  },
+  { _id: false }
+);
+
 const AssessmentAttemptSchema = new Schema<IAssessmentAttempt>(
   {
     id: { type: String, required: true, unique: true, index: true },
     userId: { type: String, required: true, index: true },
     courseId: { type: String, required: true, index: true },
     subjectId: { type: String, required: true },
-    answers: { type: [SubmittedAnswerSchema], required: true },
-    result: {
-      subject: {
-        id: { type: String, required: true },
-        name: { type: String, required: true },
-      },
-      level: { type: String, required: true },
-      accuracy: { type: Number, required: true },
-      total: { type: Number, required: true },
-      topicPerformance: { type: [TopicPerformanceSchema], default: [] },
-      strengths: { type: [String], default: [] },
-      weaknesses: { type: [String], default: [] },
-      recommendedTopicId: { type: String, required: true },
-      recommendedTopic: { type: String, required: true },
-      explanation: { type: String, required: true },
-    },
+    topicId: { type: String, index: true },
+    status: { type: String, enum: ["IN_PROGRESS", "COMPLETED"], default: "COMPLETED", index: true },
+    questionIds: { type: [String], default: [] },
+    answers: { type: [SubmittedAnswerSchema], default: [] },
+    pendingAnswers: { type: [{ questionId: String, selectedAnswer: String }], default: [] },
+    result: { type: AssessmentResultSchema, default: undefined },
   },
   { timestamps: true }
 );

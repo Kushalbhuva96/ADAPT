@@ -1,7 +1,7 @@
 import { generateStructuredAIResponse } from "./aiClient.js";
 import { AIDiagnosticQuestionsResponseJsonSchema, AIDiagnosticQuestionsResponseSchema } from "../validators/schemas.js";
 import { ZodError } from "zod";
-import { Question } from "../models/Question.js";
+import { Question, IQuestion } from "../models/Question.js";
 import { Course } from "../models/Course.js";
 
 export async function generateDiagnosticQuestions(params: {
@@ -11,13 +11,13 @@ export async function generateDiagnosticQuestions(params: {
 }) {
   const { subjectId, courseId, selectedTopicId } = params;
 
-  // Retrieve course if available to ground the questions in the real curriculum
-  let course = null;
-  if (courseId) {
-    course = await Course.findOne({ id: courseId });
-  }
+  // Course structure and reusable questions are independent reads.
+  const [course, existingQuestions] = await Promise.all([
+    courseId ? Course.findOne({ id: courseId }) : Promise.resolve(null),
+    courseId ? Question.find({ courseId, type: "diagnostic" }) : Promise.resolve([]),
+  ]);
 
-  const topicsList = course?.topics?.length
+  const allTopics = course?.topics?.length
     ? course.topics.map((t) => ({ id: t.id, name: t.name, description: t.description }))
     : [
         { id: `${subjectId}_topic_1`, name: "Foundations", description: "Core fundamental principles" },
@@ -25,27 +25,28 @@ export async function generateDiagnosticQuestions(params: {
         { id: `${subjectId}_topic_3`, name: "Implementation & Methods", description: "Key techniques" },
         { id: `${subjectId}_topic_4`, name: "Optimization & Safety", description: "Advanced concepts" },
       ];
+  const topicsList = selectedTopicId ? allTopics.filter((topic) => topic.id === selectedTopicId) : allTopics;
+  if (!topicsList.length) throw Object.assign(new Error("The selected topic does not belong to this course."), { status: 404, code: "TOPIC_NOT_FOUND" });
 
-  // Check if we already have questions in DB for this course
-  if (courseId) {
-    const existing = await Question.find({ courseId, type: "diagnostic" });
-    if (existing.length >= topicsList.length) {
-      console.log(`[Diagnostic] Using ${existing.length} existing diagnostic questions from MongoDB.`);
-      return existing.map((q) => ({
-        id: q.id,
-        topicId: q.topicId,
-        difficulty: q.difficulty,
-        question: q.question,
-        options: q.options,
-        // Omit correctOptionId and explanation to keep questions secure
-      }));
-    }
+  const reusableQuestions = selectedTopicId
+    ? existingQuestions.filter((question) => question.topicId === selectedTopicId)
+    : existingQuestions;
+  const requiredQuestionCount = selectedTopicId ? 5 : topicsList.length;
+  if (reusableQuestions.length >= requiredQuestionCount) {
+    console.log(`[Diagnostic] Reused ${requiredQuestionCount} saved diagnostic questions.`);
+    return reusableQuestions.slice(0, requiredQuestionCount).map((q) => ({
+      id: q.id,
+      topicId: q.topicId,
+      difficulty: q.difficulty,
+      question: q.question,
+      options: q.options,
+    }));
   }
 
   const systemPrompt = `You are the lead diagnostic assessment designer for ADAPT, an adaptive AI learning companion.
-Generate 5 to 7 high-quality diagnostic multiple-choice questions for the course topics provided.
+Generate ${selectedTopicId ? "exactly 5" : "5 to 7"} high-quality diagnostic multiple-choice questions for the course topics provided.
 Diagnostic requirements:
-1. Generate 1 question for each topic in the topic list.
+1. ${selectedTopicId ? "Generate five distinct questions that probe different concepts and difficulty levels within the selected topic." : "Generate 1 question for each topic in the topic list."}
 2. Questions must accurately probe foundational understanding to distinguish beginner, intermediate, and advanced learners.
 3. Every question must have exactly 4 plausible options labeled 'a', 'b', 'c', 'd'.
 4. Indicate the single correct option ('a', 'b', 'c', or 'd').
@@ -77,27 +78,31 @@ ${topicsList.map((t, idx) => `${idx + 1}. Topic ID: "${t.id}", Name: "${t.name}"
 
 Please create diagnostic questions tailored specifically to these topics.`;
 
+  const diagnosticSchema = selectedTopicId
+    ? { ...AIDiagnosticQuestionsResponseJsonSchema, properties: { ...(AIDiagnosticQuestionsResponseJsonSchema as any).properties, questions: { type: "ARRAY", minItems: 5, maxItems: 5, items: (AIDiagnosticQuestionsResponseJsonSchema as any).properties.questions.items } } }
+    : AIDiagnosticQuestionsResponseJsonSchema;
   const aiData = await generateStructuredAIResponse(
     systemPrompt,
     userPrompt,
     (raw) => {
       const parsed = AIDiagnosticQuestionsResponseSchema.parse(raw);
-      const expectedNames = new Set(topicsList.map((topic) => topic.name.toLowerCase()));
       const matchedNames = parsed.questions.map((question) => question.topicName?.toLowerCase()).filter(Boolean);
-      const hasFullCoverage = expectedNames.size === parsed.questions.length &&
-        matchedNames.length === parsed.questions.length &&
-        new Set(matchedNames).size === expectedNames.size &&
-        matchedNames.every((name) => expectedNames.has(name!));
+      const expectedNames = new Set(topicsList.map((topic) => topic.name.toLowerCase()));
+      const hasFullCoverage = selectedTopicId
+        ? parsed.questions.length === 5 && matchedNames.length === 5 && matchedNames.every((name) => expectedNames.has(name!))
+        : expectedNames.size === parsed.questions.length && matchedNames.length === parsed.questions.length &&
+          new Set(matchedNames).size === expectedNames.size && matchedNames.every((name) => expectedNames.has(name!));
       if (!hasFullCoverage) {
         throw new ZodError([{ code: "custom", path: ["questions"], message: "Return exactly one question for each curriculum topic." }]);
       }
       return parsed;
     },
-    AIDiagnosticQuestionsResponseJsonSchema
+    diagnosticSchema
   );
 
-  const generatedQuestions = [];
-  const clientSafeQuestions = [];
+  const generatedQuestions: IQuestion[] = [];
+  const clientSafeQuestions: Array<{ id: string; topicId: string; difficulty: string; question: string; options: unknown }> = [];
+  const generationTimestamp = Date.now();
 
   for (let i = 0; i < aiData.questions.length; i++) {
     const item = aiData.questions[i];
@@ -107,7 +112,7 @@ Please create diagnostic questions tailored specifically to these topics.`;
       throw new Error("Validated diagnostic question did not match a curriculum topic.");
     }
 
-    const qId = `q_${courseId || subjectId}_${Date.now()}_${i + 1}`;
+    const qId = `q_${courseId || subjectId}_${generationTimestamp}_${selectedTopicId || "course"}_${i + 1}`;
 
     const questionDoc = new Question({
       id: qId,
@@ -124,7 +129,6 @@ Please create diagnostic questions tailored specifically to these topics.`;
       estimatedTimeSeconds: 30,
     });
 
-    await questionDoc.save();
     generatedQuestions.push(questionDoc);
 
     // Client-safe version without correctOptionId
@@ -137,7 +141,8 @@ Please create diagnostic questions tailored specifically to these topics.`;
     });
   }
 
-  console.log(`[Diagnostic] Generated and saved ${generatedQuestions.length} questions to MongoDB.`);
+  if (generatedQuestions.length) await Question.insertMany(generatedQuestions);
+  console.log(`[Diagnostic] Generated and saved ${generatedQuestions.length} diagnostic questions.`);
 
   // If a specific topic was selected, prioritize questions for that topic first
   if (selectedTopicId) {

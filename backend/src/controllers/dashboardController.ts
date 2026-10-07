@@ -3,74 +3,66 @@ import { Learner } from "../models/Learner.js";
 import { Recommendation } from "../models/Recommendation.js";
 import { Progress } from "../models/Progress.js";
 import { Course } from "../models/Course.js";
+import { AssessmentAttempt } from "../models/AssessmentAttempt.js";
+import { PracticeAttempt } from "../models/PracticeAttempt.js";
 
 export async function getDashboard(req: Request, res: Response, next: NextFunction) {
   try {
-    const userId = req.params.id || "user_001";
-    let learner = await Learner.findOne({ id: userId });
-    if (!learner) {
-      learner = await Learner.findOne() || new Learner({
-        id: "user_001",
-        name: "Alex",
-        email: "alex@example.com",
-      });
-      await learner.save();
+    const userId = req.params.id;
+    const learner = await Learner.findOne({ id: userId });
+    if (!learner) return res.status(404).json({ message: "Learner not found." });
+
+    const [progress, rec, practiceCount, correctPracticeCount] = await Promise.all([
+      Progress.findOne({ userId }),
+      Recommendation.findOne({ userId }).sort({ createdAt: -1 }),
+      PracticeAttempt.countDocuments({ userId }),
+      PracticeAttempt.countDocuments({ userId, correct: true }),
+    ]);
+    let activeCourse = learner.activeCourseId ? await Course.findOne({ id: learner.activeCourseId, userId }) : null;
+    if (!activeCourse && !learner.activeCourseId) {
+      activeCourse = await Course.findOne({ userId }).sort({ updatedAt: -1 });
+      if (activeCourse) {
+        learner.activeCourseId = activeCourse.id;
+        learner.activeTopicId = activeCourse.activeTopicId || activeCourse.recommendedTopicId || null;
+        await learner.save();
+      }
     }
+    const assessment = activeCourse
+      ? await AssessmentAttempt.findOne({ userId, courseId: activeCourse.id, result: { $exists: true } }).sort({ createdAt: -1 })
+      : null;
 
-    const progress = await Progress.findOne({ userId });
-    const rec = await Recommendation.findOne({ userId }).sort({ createdAt: -1 });
-    const activeCourse = learner.activeCourseId ? await Course.findOne({ id: learner.activeCourseId }) : null;
-
-    // Calculate weak topics from learner topic mastery (< 70 score)
     const weakTopics = (learner.topicMastery || [])
-      .filter((m) => m.score < 70)
-      .map((m) => ({
-        topicId: m.topicId,
-        name: m.topicName || m.topicId,
-        score: m.score,
-      }));
+      .filter((item) => item.attempts > 0 && item.score < 70)
+      .map((item) => ({ topicId: item.topicId, name: item.topicName || item.topicId, score: item.score }));
+    const hasLearningHistory = Boolean(assessment || practiceCount > 0);
 
-    if (weakTopics.length === 0 && activeCourse?.topics?.length) {
-      weakTopics.push({
-        topicId: activeCourse.topics[0].id,
-        name: activeCourse.topics[0].name,
-        score: 50,
-      });
-    }
-
-    const overallScore = learner.overallScore || 67;
-
-    const response = {
-      user: { name: learner.name || "Learner" },
-      learningHealth: {
-        score: overallScore,
-        weeklyChange: progress?.overall?.change || 12,
-      },
+    res.json({
+      user: { id: learner.id, name: learner.name, email: learner.email },
+      course: activeCourse,
+      activeCourseId: learner.activeCourseId || null,
+      assessment: assessment?.result || null,
+      hasLearningHistory,
+      learningHealth: hasLearningHistory ? {
+        score: progress?.overall?.current ?? learner.overallScore,
+        weeklyChange: progress?.overall?.change ?? null,
+      } : null,
       momentum: {
-        streakDays: progress?.statistics?.streakDays || 4,
-        questionsAnswered: progress?.statistics?.questionsCompleted || 24,
-        weeklyAccuracy: progress?.statistics?.accuracy || Math.round(overallScore),
-        weeklyImprovement: 14,
+        streakDays: progress?.statistics?.streakDays ?? null,
+        questionsAnswered: practiceCount,
+        weeklyAccuracy: practiceCount ? Math.round((correctPracticeCount / practiceCount) * 100) : null,
+        weeklyImprovement: progress?.overall?.change ?? null,
       },
-      weakTopics: weakTopics.length ? weakTopics : [{ topicId: "foundations", name: "Core Concepts", score: 45 }],
-      recommendation: rec
-        ? {
-            topicId: rec.topicId,
-            title: rec.title,
-            durationMinutes: rec.durationMinutes,
-          }
-        : {
-            topicId: activeCourse?.recommendedTopicId || "topic_1",
-            title: "Reinforce Foundational Concepts",
-            durationMinutes: 15,
-          },
-      aiInsight:
-        learner.learningBehavior?.conceptUnderstanding > learner.learningBehavior?.application
-          ? "Your conceptual recall is high. ADAPT will prioritize application-oriented problem solving."
-          : "You learn application concepts better after seeing a concrete, real-world example.",
-    };
-
-    res.json(response);
+      weakTopics,
+      recommendation: rec ? {
+        topicId: rec.topicId,
+        title: rec.title,
+        reason: rec.reason,
+        durationMinutes: rec.durationMinutes,
+      } : null,
+      aiInsight: hasLearningHistory
+        ? (weakTopics[0] ? `Your saved results show ${weakTopics[0].name} needs more practice.` : "Your saved learning results are shaping the next recommendation.")
+        : "Your learning profile will form as you complete a course assessment and practice.",
+    });
   } catch (error) {
     next(error);
   }

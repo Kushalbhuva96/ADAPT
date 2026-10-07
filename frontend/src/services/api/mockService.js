@@ -1,5 +1,5 @@
 import { questions, dashboard, learningProfile, studyPlan, progress, user, recommendations, tutorMessages, voiceSession, voiceQuizResult, topics, subjects } from "../../data/mock/index.js";
-import { getActiveCourse, saveCourse } from "../../utils/courseState.js";
+import { activateCourse, getActiveCourse, getCourses, saveCourse } from "../../utils/courseState.js";
 
 const state = { attempts: [], studyPlan: JSON.parse(JSON.stringify(studyPlan)), profile: JSON.parse(JSON.stringify(learningProfile)), progress: JSON.parse(JSON.stringify(progress)) };
 
@@ -7,6 +7,19 @@ const delay = (value, ms=180) => new Promise(resolve => setTimeout(() => resolve
 const nextIndex = () => state.attempts.length % questions.length;
 
 export const mockService = {
+  async courses(){ return delay(getCourses().map((course) => ({ ...course, assessmentStatus: course.assessment?.result ? "COMPLETED" : "NOT_STARTED", assessmentResult: course.assessment?.result || null }))); },
+  async course(courseId){ return delay(getCourses().find((course) => course.id === courseId) || null); },
+  async activateCourse(courseId){ const course=activateCourse(courseId); return delay({course,activeCourseId:course?.id}); },
+  async activateTopic(courseId,topicId){ const course=getCourses().find((item)=>item.id===courseId); if(!course?.topics?.some((topic)=>topic.id===topicId)) throw new Error("Course topic not found."); saveCourse({...course,activeTopicId:topicId}); return delay({courseId,topicId}); },
+  async assessment(courseId){
+    const course=getCourses().find((item)=>item.id===courseId);
+    if(!course) throw new Error("Course not found.");
+    if(course.assessment?.result) return delay({status:"COMPLETED",assessmentId:`mock_${courseId}`,result:course.assessment.result});
+    let session=JSON.parse(localStorage.getItem(`adapt_assessment_session_${courseId}`)||"null");
+    if(!session){ const questions=await this.diagnosticQuestions({subjectId:course.subject.id,courseId}); session={status:"IN_PROGRESS",assessmentId:`mock_${courseId}`,questions,answers:[]}; localStorage.setItem(`adapt_assessment_session_${courseId}`,JSON.stringify(session)); }
+    return delay(session);
+  },
+  async saveAssessmentProgress(assessmentId,answers){ const course=getActiveCourse(); const key=`adapt_assessment_session_${course?.id}`; const session=JSON.parse(localStorage.getItem(key)||"null"); if(session){session.answers=answers;localStorage.setItem(key,JSON.stringify(session));} return delay(session); },
   async generateCourse({ learningRequest }) {
     const request = String(learningRequest || "").trim();
     if (!request) throw new Error("Tell us what you'd like to learn.");

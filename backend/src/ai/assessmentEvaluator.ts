@@ -7,6 +7,7 @@ import { Recommendation } from "../models/Recommendation.js";
 export async function evaluateDiagnosticAssessment(payload: {
   subjectId: string;
   courseId: string;
+  assessmentId?: string;
   userId?: string;
   answers: Array<{
     questionId: string;
@@ -17,9 +18,15 @@ export async function evaluateDiagnosticAssessment(payload: {
     selectedAnswer: string;
   }>;
 }) {
-  const { subjectId, courseId, answers, userId = "user_001" } = payload;
+  const { subjectId, courseId, assessmentId, answers, userId } = payload;
+  if (!userId) {
+    const error = new Error("A learner account is required to submit an assessment.") as Error & { status: number; code: string };
+    error.status = 401;
+    error.code = "LEARNER_REQUIRED";
+    throw error;
+  }
 
-  const course = await Course.findOne({ id: courseId });
+  const course = await Course.findOne({ id: courseId, userId });
   if (!course) {
     const error = new Error("Course not found for this assessment.") as Error & { status: number; code: string };
     error.status = 404;
@@ -27,6 +34,35 @@ export async function evaluateDiagnosticAssessment(payload: {
     throw error;
   }
   const subjectName = course?.subject?.name || subjectId.toUpperCase();
+
+  const session = assessmentId
+    ? await AssessmentAttempt.findOne({ id: assessmentId, userId, courseId, status: "IN_PROGRESS" })
+    : null;
+  if (assessmentId && !session) {
+    const completed = await AssessmentAttempt.findOne({ id: assessmentId, userId, courseId, result: { $exists: true } });
+    if (completed?.result) return completed.result;
+    const error = new Error("In-progress assessment not found.") as Error & { status: number; code: string };
+    error.status = 404;
+    error.code = "ASSESSMENT_NOT_FOUND";
+    throw error;
+  }
+  if (session) {
+    const submittedIds = answers.map((answer) => answer.questionId);
+    if (submittedIds.length !== session.questionIds.length || session.questionIds.some((id) => !submittedIds.includes(id))) {
+      const error = new Error("Submit every question in this assessment before completing it.") as Error & { status: number; code: string };
+      error.status = 400;
+      error.code = "ASSESSMENT_INCOMPLETE";
+      throw error;
+    }
+    const savedAnswers = new Map(session.pendingAnswers.map((answer) => [answer.questionId, answer.selectedAnswer]));
+    if (answers.some((answer) => savedAnswers.get(answer.questionId) !== answer.selectedAnswer)) {
+      const error = new Error("Save all assessment answers before completing the assessment.") as Error & { status: number; code: string };
+      error.status = 409;
+      error.code = "ASSESSMENT_PROGRESS_MISMATCH";
+      throw error;
+    }
+  }
+  const topicScoped = Boolean(session?.topicId);
 
   // Authoritatively evaluate answers against questions stored in MongoDB
   const questionIds = answers.map((a) => a.questionId);
@@ -93,9 +129,19 @@ export async function evaluateDiagnosticAssessment(payload: {
     name: "Foundations",
   };
 
-  const explanation = startingTopic.name
-    ? `Your diagnostic answers showed the most room to build confidence in ${startingTopic.name}. Topics with stronger baseline scores are marked for accelerated application.`
-    : "Start with the first topic and build your mastery baseline.";
+  const lowestAccuracy = sortedByAccuracy[0]?.accuracy ?? null;
+  const lowestTopics = lowestAccuracy === null
+    ? []
+    : assessedTopics.filter((topic) => topic.accuracy === lowestAccuracy);
+  const explanation = !startingTopic.name
+    ? "Start with the first topic and build your mastery baseline."
+    : lowestAccuracy === 100
+      ? `Your diagnostic showed strong understanding across the assessed topics. Start with ${startingTopic.name} as a baseline; ADAPT will adjust recommendations using your practice results.`
+      : lowestTopics.length > 1
+        ? `Your lowest diagnostic results were tied across ${lowestTopics.map((topic) => topic.name).join(", ")}. Begin with ${startingTopic.name}; ADAPT will adjust recommendations as you practice.`
+        : `Your diagnostic showed more room to build confidence in ${startingTopic.name} (${lowestAccuracy}% on the assessed questions). Topics with stronger baseline scores are marked for accelerated application.`;
+
+  const learner = await Learner.findOne({ id: userId });
 
   const result = {
     subject: {
@@ -114,74 +160,78 @@ export async function evaluateDiagnosticAssessment(payload: {
   };
 
   // 1. Save AssessmentAttempt to MongoDB
-  const attemptId = `attempt_${Date.now()}`;
-  const attemptDoc = new AssessmentAttempt({
-    id: attemptId,
-    userId,
-    courseId,
-    subjectId,
-    answers: evaluatedAnswers,
-    result,
-  });
+  const attemptId = session?.id || `attempt_${Date.now()}`;
+  const attemptDoc = session || new AssessmentAttempt({ id: attemptId, userId, courseId, subjectId });
+  if (!learner) {
+    const error = new Error("Learner account not found.") as Error & { status: number; code: string };
+    error.status = 404;
+    error.code = "LEARNER_NOT_FOUND";
+    throw error;
+  }
+  attemptDoc.status = "COMPLETED";
+  attemptDoc.questionIds = questionIds;
+  attemptDoc.answers = evaluatedAnswers;
+  attemptDoc.pendingAnswers = [];
+  attemptDoc.result = result;
   await attemptDoc.save();
 
   // 2. Update Course in MongoDB
   if (course) {
     course.status = "active";
-    course.learnerLevel = level;
+    if (!topicScoped) course.learnerLevel = level;
     course.recommendedTopicId = startingTopic.topicId;
     course.activeTopicId = startingTopic.topicId;
     for (const topic of course.topics) {
       const performance = topicPerformance.find((entry) => entry.topicId === topic.id);
       if (performance?.total) {
-        topic.attempts = performance.total;
-        topic.accuracy = performance.accuracy ?? 0;
-        topic.mastery = performance.accuracy ?? 0;
+        const oldAttempts = topicScoped ? topic.attempts || 0 : 0;
+        const oldAccuracy = topicScoped ? topic.accuracy || 0 : 0;
+        const newAccuracy = performance.accuracy ?? 0;
+        topic.attempts = oldAttempts + performance.total;
+        topic.accuracy = Math.round((oldAccuracy * oldAttempts + newAccuracy * performance.total) / topic.attempts);
+        topic.mastery = topic.accuracy;
         topic.status = topic.mastery >= 80 ? "mastered" : topic.mastery >= 60 ? "improving" : "needs_attention";
+        topic.learningState = topic.mastery >= 80 ? "STRONG" : topic.mastery < 60 ? "NEEDS_IMPROVEMENT" : "UNLOCKED";
+        topic.unlockedAt ||= new Date();
       }
     }
+    course.completedTopicIds = course.topics.filter((topic) => topic.mastery >= 80).map((topic) => topic.id);
+    course.subject.completedTopics = course.completedTopicIds.length;
+    course.progress = course.topics.length ? Math.round((course.completedTopicIds.length / course.topics.length) * 100) : 0;
     await course.save();
   }
 
   // 3. Update or create Learner model with topic mastery
-  let learner = await Learner.findOne({ id: userId });
-  if (!learner) {
-    learner = new Learner({
-      id: userId,
-      name: "Alex",
-      email: "alex@example.com",
-      currentLevel: level,
-      overallScore: accuracyPct,
-      strengths,
-      weaknesses,
-      activeCourseId: courseId,
-      activeTopicId: startingTopic.topicId,
-    });
-  } else {
+  if (!topicScoped) {
     learner.currentLevel = level;
     learner.overallScore = accuracyPct;
     learner.strengths = strengths;
     learner.weaknesses = weaknesses;
-    learner.activeCourseId = courseId;
-    learner.activeTopicId = startingTopic.topicId;
   }
+  learner.activeCourseId = courseId;
+  learner.activeTopicId = startingTopic.topicId;
 
   // Update learner topic mastery
   for (const tp of topicPerformance) {
     if (tp.total > 0 && tp.accuracy !== null) {
       const existingIdx = learner.topicMastery.findIndex((m) => m.topicId === tp.topicId);
+      const previous = learner.topicMastery[existingIdx];
+      const oldAttempts = topicScoped ? previous?.attempts || 0 : 0;
+      const oldAccuracy = topicScoped ? previous?.accuracy || 0 : 0;
+      const assessmentAccuracy = tp.accuracy;
+      const totalAttempts = oldAttempts + tp.total;
       const masteryEntry = {
         topicId: tp.topicId,
         topicName: tp.name,
-        score: tp.accuracy,
-        accuracy: tp.accuracy,
-        attempts: tp.total,
-        correctAnswers: tp.correct,
-        incorrectAnswers: tp.total - tp.correct,
+        score: Math.round(((previous?.score || 0) * oldAttempts + assessmentAccuracy * tp.total) / totalAttempts),
+        accuracy: Math.round((oldAccuracy * oldAttempts + assessmentAccuracy * tp.total) / totalAttempts),
+        attempts: totalAttempts,
+        correctAnswers: (topicScoped ? previous?.correctAnswers || 0 : 0) + tp.correct,
+        incorrectAnswers: (topicScoped ? previous?.incorrectAnswers || 0 : 0) + tp.total - tp.correct,
         lastAssessed: new Date(),
       };
       if (existingIdx >= 0) {
-        learner.topicMastery[existingIdx] = masteryEntry;
+      learner.topicMastery[existingIdx] = masteryEntry;
       } else {
         learner.topicMastery.push(masteryEntry);
       }
@@ -190,8 +240,8 @@ export async function evaluateDiagnosticAssessment(payload: {
   await learner.save();
 
   // 4. Save Recommendation to MongoDB
-  const recDoc = new Recommendation({
-    id: `rec_${Date.now()}`,
+  await Recommendation.create({
+    id: `rec_${attemptId}`,
     userId,
     type: "topic_practice",
     topicId: startingTopic.topicId,
@@ -200,7 +250,6 @@ export async function evaluateDiagnosticAssessment(payload: {
     durationMinutes: 15,
     priority: "high",
   });
-  await recDoc.save();
 
   console.log(`[AssessmentEvaluator] Assessment ${attemptId} saved. Level: ${level}, Recommended: ${startingTopic.name}`);
 

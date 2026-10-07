@@ -1,5 +1,5 @@
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api";
-const USE_MOCK = String(import.meta.env.VITE_USE_MOCK ?? "true") !== "false";
+const USE_MOCK = String(import.meta.env.VITE_USE_MOCK ?? "false") === "true";
 
 /** Returns the stored JWT token (null if not authenticated) */
 function getToken() {
@@ -15,9 +15,15 @@ function getUser() {
   }
 }
 
-/** Returns the current user's ID (falls back to "user_001" for demo) */
+/** Returns the current authenticated learner ID, or null before sign-in. */
 function getUserId() {
-  return getUser()?.id || "user_001";
+  return getUser()?.id || null;
+}
+
+function requireUserId() {
+  const userId = getUserId();
+  if (!userId) throw new Error("Sign in to continue.");
+  return userId;
 }
 
 async function request(path, options = {}) {
@@ -33,9 +39,10 @@ async function request(path, options = {}) {
     // Clear stale session and let the app handle redirect
     localStorage.removeItem("adapt_token");
     localStorage.removeItem("adapt_user");
+    window.dispatchEvent(new Event("adapt:unauthorized"));
   }
   if (!response.ok) throw new Error(data.message || "Request failed");
   return data;
 }
 
-export const apiClient = { USE_MOCK, request, baseUrl: BASE_URL, getToken, getUser, getUserId };
+export const apiClient = { USE_MOCK, request, baseUrl: BASE_URL, getToken, getUser, getUserId, requireUserId };

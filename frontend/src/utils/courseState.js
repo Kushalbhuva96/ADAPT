@@ -47,3 +47,17 @@ export const activateCourse = (courseId) => {
   else localStorage.removeItem("adapt_assessment");
   return course;
 };
+
+export const removeCourseFromLocal = (courseId) => {
+  const courses = getCourses().filter((course) => course.id !== courseId);
+  localStorage.setItem("adapt_courses", JSON.stringify(courses));
+  if (read("adapt_course", null)?.id === courseId) {
+    if (courses[0]) localStorage.setItem("adapt_course", JSON.stringify(courses[0]));
+    else localStorage.removeItem("adapt_course");
+  }
+  if (localStorage.getItem("adapt_active_course_id") === courseId) {
+    if (courses[0]) localStorage.setItem("adapt_active_course_id", courses[0].id);
+    else localStorage.removeItem("adapt_active_course_id");
+  }
+  localStorage.removeItem("adapt_assessment");
+};

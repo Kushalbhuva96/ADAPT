@@ -66,11 +66,11 @@ const LearnerSchema = new Schema<ILearner>(
       default: "Beginner",
     },
     preferences: {
-      learningStyles: { type: [String], default: ["examples", "short_explanations"] },
+      learningStyles: { type: [String], default: [] },
       preferredDifficulty: { type: String, enum: ["easy", "medium", "hard"], default: "medium" },
       voiceEnabled: { type: Boolean, default: true },
     },
-    overallScore: { type: Number, default: 50, min: 0, max: 100 },
+    overallScore: { type: Number, default: 0, min: 0, max: 100 },
     strengths: { type: [String], default: [] },
     weaknesses: { type: [String], default: [] },
     topicMastery: { type: [TopicMasterySchema], default: [] },
