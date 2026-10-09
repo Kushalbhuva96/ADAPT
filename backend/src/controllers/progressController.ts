@@ -51,13 +51,3 @@ export async function getProgress(req: Request, res: Response, next: NextFunctio
     next(error);
   }
 }
-
-export async function syncOffline(req: Request, res: Response, next: NextFunction) {
-  try {
-    const userId = req.params.id;
-    console.log(`[Sync] Received offline sync queue for user: ${userId}`);
-    res.json({ status: "synced", pendingSyncCount: 0, lastSyncedAt: new Date().toISOString() });
-  } catch (error) {
-    next(error);
-  }
-}

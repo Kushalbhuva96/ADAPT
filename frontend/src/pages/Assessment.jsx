@@ -62,7 +62,9 @@ export default function Assessment() {
         setSelected(savedAnswer?.selectedAnswer || null);
       } catch (err) {
         if (active) {
-          setError(err.message || "ADAPT could not load this assessment. Please retry.");
+          setError(!navigator.onLine
+            ? "This diagnostic assessment requires a connection. Its questions and grading are managed by ADAPT's server; connect and retry to continue."
+            : err.message || "ADAPT could not load this assessment. Please retry.");
           setRetryable(Boolean(err.retryable));
         }
       }

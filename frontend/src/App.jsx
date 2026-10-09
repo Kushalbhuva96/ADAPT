@@ -9,6 +9,7 @@ import Tutor from "./pages/Tutor";
 import VoiceTutor from "./pages/VoiceTutor";
 import Progress from "./pages/Progress";
 import Profile from "./pages/Profile";
+import Settings from "./pages/Settings";
 import StudyPlan from "./pages/StudyPlan";
 import Assessment from "./pages/Assessment";
 import VoiceQuiz from "./pages/VoiceQuiz";
@@ -44,6 +45,7 @@ export default function App() {
     <Route path="/study-plan" element={<RequireAuth><StudyPlan/></RequireAuth>}/>
     <Route path="/progress" element={<RequireAuth><Progress/></RequireAuth>}/>
     <Route path="/profile" element={<RequireAuth><Profile/></RequireAuth>}/>
+    <Route path="/settings" element={<RequireAuth><Settings/></RequireAuth>}/>
     <Route path="*" element={<Navigate to="/dashboard" replace/>}/>
   </Routes>;
 }

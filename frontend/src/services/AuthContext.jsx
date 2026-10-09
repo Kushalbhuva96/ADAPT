@@ -3,9 +3,18 @@ import { api, clearApiRuntimeState } from "./api";
 
 const AuthContext = createContext(null);
 
+function readStoredUser() {
+  try {
+    const user = JSON.parse(localStorage.getItem("adapt_user") || "null");
+    return user?.id ? user : null;
+  } catch {
+    return null;
+  }
+}
+
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);
-  const [checking, setChecking] = useState(true);
+  const [user, setUser] = useState(readStoredUser);
+  const [checking, setChecking] = useState(() => Boolean(localStorage.getItem("adapt_token") && !readStoredUser()));
 
   const clearSession = useCallback(() => {
     clearApiRuntimeState();
@@ -28,12 +37,27 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     let current = true;
     const token = localStorage.getItem("adapt_token");
-    if (!token) { setChecking(false); return () => { current = false; }; }
+    if (!token) {
+      setUser(null);
+      setChecking(false);
+      return () => { current = false; };
+    }
+    const cachedUser = readStoredUser();
+    if (cachedUser) {
+      setUser(cachedUser);
+      setChecking(false);
+    } else {
+      setChecking(true);
+    }
     api.me().then((result) => {
       if (!current) return;
       localStorage.setItem("adapt_user", JSON.stringify(result.user));
       setUser(result.user);
-    }).catch(() => { if (current) clearSession(); })
+    }).catch((error) => {
+      if (!current) return;
+      if (error.status === 401 || error.status === 403) clearSession();
+      else if (!cachedUser) setUser(null);
+    })
       .finally(() => { if (current) setChecking(false); });
     return () => { current = false; };
   }, [clearSession]);

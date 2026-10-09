@@ -7,7 +7,8 @@ import { getNextPractice, answerPractice } from "../controllers/practiceControll
 import { getDashboard } from "../controllers/dashboardController.js";
 import { sendTutorMessage, getRecommendations } from "../controllers/tutorController.js";
 import { getStudyPlan, completePlanItem } from "../controllers/studyPlanController.js";
-import { getProgress, syncOffline } from "../controllers/progressController.js";
+import { getProgress } from "../controllers/progressController.js";
+import { downloadOfflinePractice, syncOfflinePractice } from "../controllers/offlinePracticeController.js";
 import { voiceStart, voiceMessage, voiceQuizEvaluate } from "../controllers/voiceController.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 
@@ -48,6 +49,7 @@ apiRouter.post(["/courses/:id/topics/:topicId/activate", "/v1/courses/:id/topics
 apiRouter.get(["/courses/:id", "/v1/courses/:id"], getCourseById);
 apiRouter.get(["/courses/:id/topics", "/v1/courses/:id/topics"], getCourseTopics);
 apiRouter.get(["/courses/:courseId/assessment", "/v1/courses/:courseId/assessment"], getAssessmentSession);
+apiRouter.get(["/courses/:courseId/offline-practice", "/v1/courses/:courseId/offline-practice"], downloadOfflinePractice);
 apiRouter.put(["/assessments/:assessmentId/progress", "/v1/assessments/:assessmentId/progress"], saveAssessmentProgress);
 
 // Diagnostic Assessments
@@ -65,7 +67,7 @@ apiRouter.get(["/recommendations/:id", "/v1/learners/:id/recommendations"], getR
 // Dashboard & Progress
 apiRouter.get(["/dashboard/:id", "/v1/dashboard/:id"], getDashboard);
 apiRouter.get(["/progress/:id", "/v1/learners/:id/progress"], getProgress);
-apiRouter.post(["/sync/:id", "/v1/progress/sync"], syncOffline);
+apiRouter.post(["/sync/:id", "/offline/sync", "/v1/progress/sync"], syncOfflinePractice);
 
 // Study Plan
 apiRouter.get(["/study-plan/:id", "/v1/study-plan/:id"], getStudyPlan);

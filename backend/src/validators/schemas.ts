@@ -138,7 +138,21 @@ export const PracticeAnswerSchema = z.object({
   selectedOptionId: z.string(),
   timeTakenSeconds: z.number().default(0),
   userId: z.string().optional(),
+  clientAttemptId: z.string().min(1).max(128).optional(),
 });
+
+export const OfflinePracticeSyncSchema = z.object({
+  userId: z.string().optional(),
+  activities: z.array(z.object({
+    activityId: z.string().min(1).max(128),
+    courseId: z.string().min(1).max(128),
+    questionId: z.string().min(1).max(256),
+    topicId: z.string().min(1).max(128),
+    selectedOptionId: z.string().min(1).max(32),
+    timeTakenSeconds: z.number().int().min(0).max(86_400),
+    createdAt: z.string().datetime(),
+  }).strict()).max(20),
+}).strict();
 
 export const TutorMessageSchema = z.object({
   message: z.string().min(1),

@@ -7,6 +7,8 @@
   "scripts": {
     "dev": "tsx src/server.ts",
     "build": "tsc",
+    "test:offline": "tsx --test src/offlinePractice.test.ts",
+    "test:offline:integration": "tsx --test src/offlinePractice.integration.test.ts",
     "start": "tsx src/server.ts"
   },
   "dependencies": {

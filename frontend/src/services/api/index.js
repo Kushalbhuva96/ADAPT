@@ -5,12 +5,24 @@ import { cachedRequest, clearRuntimeCache } from "../runtimeCache";
 const svc = () => (apiClient.USE_MOCK ? mockService : null);
 const uid = () => apiClient.requireUserId();
 const pendingAssessments = new Map();
+const pendingMeRequests = new Map();
 const cacheScope = () => `learner:${uid()}`;
 const invalidateLearner = () => clearRuntimeCache(cacheScope());
 
 export function clearApiRuntimeState() {
   clearRuntimeCache();
   pendingAssessments.clear();
+  pendingMeRequests.clear();
+}
+
+function loadCurrentUser() {
+  const token = apiClient.getToken();
+  if (pendingMeRequests.has(token)) return pendingMeRequests.get(token);
+  const request = apiClient.request("/auth/me");
+  pendingMeRequests.set(token, request);
+  const clearPending = () => { if (pendingMeRequests.get(token) === request) pendingMeRequests.delete(token); };
+  request.then(clearPending, clearPending);
+  return request;
 }
 
 function loadAssessment(courseId, topicId) {
@@ -30,7 +42,7 @@ export const api = {
   register: (p) => svc()?.register(p) ?? apiClient.request("/auth/register", { method: "POST", body: JSON.stringify(p) }),
   login: (p) => svc()?.login(p) ?? apiClient.request("/auth/login", { method: "POST", body: JSON.stringify(p) }),
   logout: () => apiClient.request("/auth/logout", { method: "POST" }),
-  me: () => svc()?.me() ?? apiClient.request(`/auth/me?userId=${uid()}`),
+  me: () => svc()?.me() ?? loadCurrentUser(),
 
   // Courses
   courses: () => cachedRequest(`${cacheScope()}:courses`, () => svc()?.courses?.() ?? apiClient.request(`/courses?userId=${encodeURIComponent(uid())}`), 30_000),
@@ -50,6 +62,8 @@ export const api = {
   // Practice
   nextPractice: (_id) => svc()?.nextPractice(_id) ?? apiClient.request(`/practice/next/${uid()}`),
   answerPractice: async (p) => { const value = await (svc()?.answerPractice(p) ?? apiClient.request("/practice/answer", { method: "POST", body: JSON.stringify({ ...p, userId: uid() }) })); invalidateLearner(); return value; },
+  offlinePracticePack: (courseId) => apiClient.request(`/courses/${encodeURIComponent(courseId)}/offline-practice`),
+  syncOfflinePractice: async (activities) => { const value = await apiClient.request("/offline/sync", { method: "POST", body: JSON.stringify({ activities }) }); invalidateLearner(); return value; },
 
   // Tutor
   tutorMessage: (p) => svc()?.tutorMessage(p) ?? apiClient.request("/tutor/message", { method: "POST", body: JSON.stringify({ ...p, userId: uid() }) }),

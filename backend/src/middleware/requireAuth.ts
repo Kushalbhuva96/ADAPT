@@ -6,7 +6,7 @@ export type AuthenticatedRequest = Request & { auth?: { userId: string; jti: str
 
 const identityKeys = new Set(["userId", "learnerId"]);
 
-function submittedIdentityMatches(value: unknown, userId: string, key = ""): boolean {
+export function submittedIdentityMatches(value: unknown, userId: string, key = ""): boolean {
   if (Array.isArray(value)) return value.every((item) => submittedIdentityMatches(item, userId, key));
   if (!value || typeof value !== "object") return !identityKeys.has(key) || value === undefined || value === userId;
   return Object.entries(value).every(([childKey, childValue]) => submittedIdentityMatches(childValue, userId, childKey));

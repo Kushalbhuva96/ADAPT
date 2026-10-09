@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Question } from "../models/Question.js";
 import { Course } from "../models/Course.js";
 import { Learner } from "../models/Learner.js";
@@ -6,6 +7,7 @@ import { Progress } from "../models/Progress.js";
 import { AssessmentAttempt } from "../models/AssessmentAttempt.js";
 import { PracticeSubmission } from "../models/PracticeSubmission.js";
 import { PracticeQuestionDelivery } from "../models/PracticeQuestionDelivery.js";
+import { PracticeSyncLock } from "../models/PracticeSyncLock.js";
 import { generateStructuredAIResponse } from "./aiClient.js";
 import { AIDiagnosticQuestionJsonSchema, AIDiagnosticQuestionSchema } from "../validators/schemas.js";
 
@@ -198,22 +200,28 @@ Format strictly as JSON:
   };
 }
 
-export async function submitPracticeAnswer(params: {
+async function processPracticeAnswer(params: {
   questionId: string;
   selectedOptionId: string;
   timeTakenSeconds?: number;
   userId?: string;
+  clientAttemptId?: string;
+  courseId?: string;
+  topicId?: string;
 }) {
-  const { questionId, selectedOptionId, timeTakenSeconds = 15, userId } = params;
+  const { questionId, selectedOptionId, timeTakenSeconds = 15, userId, clientAttemptId, courseId: expectedCourseId, topicId: expectedTopicId } = params;
   if (!userId) throw Object.assign(new Error("A learner account is required."), { status: 401, code: "LEARNER_REQUIRED" });
 
   // Authoritatively evaluate against question in MongoDB
   const qDoc = await Question.findOne({ id: questionId });
-  if (!qDoc) {
+  if (!qDoc || qDoc.type !== "practice") {
     const error = new Error("Practice question not found.") as Error & { status: number; code: string };
     error.status = 404;
     error.code = "QUESTION_NOT_FOUND";
     throw error;
+  }
+  if ((expectedCourseId && qDoc.courseId !== expectedCourseId) || (expectedTopicId && qDoc.topicId !== expectedTopicId)) {
+    throw Object.assign(new Error("This downloaded question does not match its saved course and topic."), { status: 403, code: "QUESTION_SCOPE_MISMATCH" });
   }
   const correctOptionId = qDoc.correctOptionId;
   const explanation = qDoc.explanation;
@@ -233,17 +241,27 @@ export async function submitPracticeAnswer(params: {
     throw Object.assign(new Error("Choose one of the available answer options."), { status: 400, code: "INVALID_PRACTICE_OPTION" });
   }
 
-  const priorSubmission = await PracticeSubmission.findOne({ userId, questionId });
-  if (priorSubmission) {
-    if (priorSubmission.state === "COMPLETED" && priorSubmission.result) return priorSubmission.result;
+  const [priorSubmission, priorAttemptSubmission] = await Promise.all([
+    PracticeSubmission.findOne({ userId, questionId }),
+    clientAttemptId ? PracticeSubmission.findOne({ userId, clientAttemptId }) : Promise.resolve(null),
+  ]);
+  const prior = priorAttemptSubmission || priorSubmission;
+  if (prior && (prior.questionId !== questionId || (prior.selectedOptionId && prior.selectedOptionId !== selectedOptionId))) {
+    throw Object.assign(new Error("This question already has a saved answer that differs from this submission."), { status: 409, code: "PRACTICE_IDEMPOTENCY_MISMATCH" });
+  }
+  if (prior) {
+    if (prior.state === "COMPLETED" && prior.result) return prior.result;
     throw Object.assign(new Error("This answer is already being recorded."), { status: 409, code: "PRACTICE_ANSWER_IN_PROGRESS" });
   }
   let submission;
   try {
-    [submission] = await PracticeSubmission.create([{ userId, questionId, state: "PROCESSING" }]);
+    [submission] = await PracticeSubmission.create([{ userId, questionId, clientAttemptId, selectedOptionId, timeTakenSeconds, state: "PROCESSING" }]);
   } catch (error) {
     if ((error as { code?: number })?.code !== 11000) throw error;
-    const existing = await PracticeSubmission.findOne({ userId, questionId });
+    const existing = await PracticeSubmission.findOne(clientAttemptId ? { userId, $or: [{ questionId }, { clientAttemptId }] } : { userId, questionId });
+    if (existing && (existing.questionId !== questionId || (existing.selectedOptionId && existing.selectedOptionId !== selectedOptionId))) {
+      throw Object.assign(new Error("This question already has a saved answer that differs from this submission."), { status: 409, code: "PRACTICE_IDEMPOTENCY_MISMATCH" });
+    }
     if (existing?.state === "COMPLETED" && existing.result) return existing.result;
     throw Object.assign(new Error("This answer is already being recorded."), { status: 409, code: "PRACTICE_ANSWER_IN_PROGRESS" });
   }
@@ -378,7 +396,7 @@ export async function submitPracticeAnswer(params: {
     : `Recent topic accuracy is ${Math.round(recentAccuracy * 100)}% and mastery is ${currentMastery}%; continuing with ${nextDifficulty} difficulty.`;
 
   const attemptDoc = new PracticeAttempt({
-    id: `practice_attempt_${Date.now()}`,
+    id: clientAttemptId ? `offline_${clientAttemptId}` : `practice_attempt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     userId,
     questionId,
     topicId,
@@ -433,4 +451,36 @@ export async function submitPracticeAnswer(params: {
   submission.result = result;
   await submission.save();
   return result;
+}
+
+export async function submitPracticeAnswer(params: Parameters<typeof processPracticeAnswer>[0]) {
+  if (!params.userId) return processPracticeAnswer(params);
+  const userId = params.userId;
+  const lockToken = randomUUID();
+  let acquired = false;
+
+  for (let attempt = 0; attempt < 80 && !acquired; attempt += 1) {
+    const now = new Date();
+    try {
+      const lock = await PracticeSyncLock.findOneAndUpdate(
+        { userId, expiresAt: { $lte: now } },
+        { $set: { lockToken, expiresAt: new Date(now.getTime() + 120_000) } },
+        { new: true, upsert: true }
+      );
+      acquired = lock?.lockToken === lockToken;
+    } catch (error) {
+      if ((error as { code?: number })?.code !== 11000) throw error;
+    }
+    if (!acquired) await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  if (!acquired) {
+    throw Object.assign(new Error("Another answer is being saved for this learner. Retry sync in a moment."), { status: 409, code: "PRACTICE_SYNC_BUSY" });
+  }
+
+  try {
+    return await processPracticeAnswer(params);
+  } finally {
+    await PracticeSyncLock.deleteOne({ userId, lockToken });
+  }
 }
