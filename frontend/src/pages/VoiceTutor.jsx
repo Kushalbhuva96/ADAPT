@@ -50,6 +50,17 @@ export default function VoiceTutor() {
 
   preferredSpeechVoiceRef.current = preferredSpeechVoice;
 
+  const primeSpeechOutput = () => {
+    const synthesis = globalThis.speechSynthesis;
+    if (!synthesis || typeof SpeechSynthesisUtterance === "undefined") return;
+    try {
+      synthesis.resume?.();
+      const primingUtterance = new SpeechSynthesisUtterance("ADAPT voice ready.");
+      primingUtterance.volume = 0;
+      synthesis.speak(primingUtterance);
+    } catch { /* Regular playback below will show a visible error if this browser cannot speak. */ }
+  };
+
   const addMessage = (message) => {
     const next = [...messagesRef.current, message].slice(-40);
     messagesRef.current = next;
@@ -213,12 +224,15 @@ export default function VoiceTutor() {
       setError("Server AI needs an internet connection. Reconnect, or select Local AI in Tutor if its model is loaded.");
       return;
     }
+    // Some installed WebKit PWAs require the first speech call to occur in a tap handler.
+    if (voiceOutput) primeSpeechOutput();
     controllerRef.current?.start();
   };
   const stop = () => controllerRef.current?.stop();
   const setVoiceOutput = () => {
     const next = !voiceOutput;
     setVoiceOutputState(next);
+    if (next) primeSpeechOutput();
     controllerRef.current?.setVoiceOutput(next);
   };
   const changeSpeechVoice = (event) => {
