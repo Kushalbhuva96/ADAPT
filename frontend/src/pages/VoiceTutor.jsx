@@ -10,6 +10,7 @@ import { generateLocalTutorReply } from "../services/localTutor";
 import { getLocalTutorEngine, getTutorMode, subscribeTutorMode } from "../services/tutorMode";
 import { createVoiceSessionController } from "../services/voiceSessionController";
 import { requestVoiceTutorReply } from "../services/voiceTutorService";
+import { readSpeechVoicePreference, resolveSpeechVoice, speechVoiceId, writeSpeechVoicePreference } from "../services/speechVoicePreference";
 
 const stateCopy = {
   IDLE: ["Ready", "Start a conversation when you are ready."],
@@ -32,6 +33,8 @@ export default function VoiceTutor() {
   const [mode, setMode] = useState(() => getTutorMode());
   const [online, setOnline] = useState(() => globalThis.navigator?.onLine !== false);
   const [meterAvailable, setMeterAvailable] = useState(false);
+  const [availableSpeechVoices, setAvailableSpeechVoices] = useState([]);
+  const [preferredSpeechVoice, setPreferredSpeechVoice] = useState(() => readSpeechVoicePreference());
   const [context, setContext] = useState(null);
   const messagesRef = useRef(messages);
   const activeLearnerRef = useRef(learnerId);
@@ -40,9 +43,12 @@ export default function VoiceTutor() {
   const meterAvailableRef = useRef(false);
   const callbacks = useRef({});
   const controllerRef = useRef(null);
+  const preferredSpeechVoiceRef = useRef(preferredSpeechVoice);
   const busyRef = useRef(false);
   const requestSequenceRef = useRef(0);
   const [lastAssistant, setLastAssistant] = useState(() => [...messages].reverse().find((item) => item.role === "assistant")?.content || "");
+
+  preferredSpeechVoiceRef.current = preferredSpeechVoice;
 
   const addMessage = (message) => {
     const next = [...messagesRef.current, message].slice(-40);
@@ -112,12 +118,33 @@ export default function VoiceTutor() {
   };
 
   useEffect(() => {
+    const synthesis = globalThis.speechSynthesis;
+    if (!synthesis?.getVoices) return undefined;
+    const refreshVoices = () => setAvailableSpeechVoices(synthesis.getVoices());
+    refreshVoices();
+    synthesis.addEventListener?.("voiceschanged", refreshVoices);
+    return () => synthesis.removeEventListener?.("voiceschanged", refreshVoices);
+  }, []);
+
+  useEffect(() => {
     controllerRef.current = createVoiceSessionController({
       onState: (...args) => callbacks.current.onState(...args),
       onPartial: (...args) => callbacks.current.onPartial(...args),
       onAudioLevel: (...args) => callbacks.current.onAudioLevel(...args),
       onError: (...args) => callbacks.current.onError(...args),
       onUtterance: (...args) => callbacks.current.onUtterance(...args),
+      utteranceFactory: (text) => {
+        const utterance = new SpeechSynthesisUtterance(text);
+        const voices = globalThis.speechSynthesis?.getVoices?.() || availableSpeechVoices;
+        const voice = resolveSpeechVoice(voices, preferredSpeechVoiceRef.current);
+        if (voice) {
+          utterance.voice = voice;
+          utterance.lang = voice.lang || globalThis.navigator?.language || "en-US";
+        } else {
+          utterance.lang = globalThis.navigator?.language || "en-US";
+        }
+        return utterance;
+      },
       diagnostics: import.meta.env.DEV,
     });
     return () => {
@@ -194,6 +221,12 @@ export default function VoiceTutor() {
     setVoiceOutputState(next);
     controllerRef.current?.setVoiceOutput(next);
   };
+  const changeSpeechVoice = (event) => {
+    const id = event.target.value;
+    setPreferredSpeechVoice(id);
+    preferredSpeechVoiceRef.current = id;
+    writeSpeechVoicePreference(id);
+  };
   const sendText = (event) => {
     event.preventDefault();
     const text = input.trim();
@@ -216,6 +249,13 @@ export default function VoiceTutor() {
       {state === "SPEAKING" && <span className="voice-meter-note">Use Stop speaking &amp; listen to interrupt</span>}
       {partial && <div className="voice-live-partial" aria-live="polite"><span>HEARING</span> “{partial}”</div>}
       {error && <div className="form-error voice-error" role="alert">{error}</div>}
+      <label className="voice-output-select">Spoken voice
+        <select value={preferredSpeechVoice} onChange={changeSpeechVoice} aria-label="Select spoken voice">
+          <option value="">Browser default</option>
+          {availableSpeechVoices.map((voice) => <option key={speechVoiceId(voice)} value={speechVoiceId(voice)}>{voice.name} ({voice.lang})</option>)}
+        </select>
+      </label>
+      {preferredSpeechVoice && !resolveSpeechVoice(availableSpeechVoices, preferredSpeechVoice) && <p className="voice-privacy-note">The saved voice is unavailable here. Browser default is being used. Choose the same voice on desktop and this device when it appears in both lists.</p>}
       <div className="voice-action-row">
         {state === "IDLE" || state === "ERROR" ? <button type="button" className="btn btn-primary" onClick={start}><Mic size={15} /> Start conversation</button> : <button type="button" className="btn btn-danger" onClick={stop}><Square size={14} /> Stop conversation</button>}
         {state === "SPEAKING" && controllerRef.current?.isActive() && <button type="button" className="btn voice-interrupt" onClick={() => controllerRef.current?.interruptAndListen()}><Ear size={15} /> Stop speaking &amp; listen</button>}

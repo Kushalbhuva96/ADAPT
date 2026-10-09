@@ -858,6 +858,8 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline-colo
 .voice-meter-note { margin-top:12px; color:var(--cyan); font-size:9px; letter-spacing:.03em; }
 .voice-error { width:min(520px,100%); margin-top:14px; text-align:left; }
 .voice-action-row { display:flex; justify-content:center; gap:8px; flex-wrap:wrap; margin-top:22px; }
+.voice-output-select { display:flex; align-items:center; justify-content:center; gap:10px; margin-top:16px; color:var(--muted); font-size:10px; letter-spacing:.06em; }
+.voice-output-select select { max-width:min(300px,70vw); padding:7px 10px; border:1px solid var(--border); border-radius:9px; color:var(--text); background:var(--bg2); font:inherit; letter-spacing:normal; }
 .voice-muted { border-color:rgba(167,139,250,.35); color:var(--lavender); }
 .voice-interrupt { color:#BAE6FD; border-color:rgba(56,189,248,.35); background:rgba(14,165,233,.08); }
 .voice-network.is-online { color:var(--success); }.voice-network.is-offline { color:#FCA5A5; }

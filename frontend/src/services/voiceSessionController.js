@@ -512,6 +512,7 @@ export function createVoiceSessionController({
       clearSpeechStart();
       currentUtterance = null;
       currentSpeechResolve = null;
+      debug(error ? "speech-playback-failed" : "speech-playback-finished");
       if (error) onError("The tutor response is shown, but speech playback failed in this browser.");
       handlingTurn = false;
       if (active) {
@@ -539,7 +540,10 @@ export function createVoiceSessionController({
       emitState("SPEAKING");
     };
     utterance.onend = () => finish(false);
-    utterance.onerror = () => finish(true);
+    utterance.onerror = (event) => {
+      debug("speech-synthesis-error", { error: event?.error || "unknown" });
+      finish(true);
+    };
     speechStartTimer = setTimeout(() => {
       if (utteranceSequence !== speechSequence || !valid()) return;
       cancelSpeech();
@@ -549,7 +553,14 @@ export function createVoiceSessionController({
       else emitState("IDLE");
       resolve(false);
     }, speechStartTimeoutMs);
-    try { synthesis.speak(utterance); }
+    try {
+      if (synthesis.paused) {
+        debug("speech-synthesis-resume-requested");
+        try { synthesis.resume?.(); } catch { /* Some engines expose resume but do not implement it. */ }
+      }
+      debug("speech-synthesis-utterance-queued", { textLength: lastResponse.length });
+      synthesis.speak(utterance);
+    }
     catch { finish(true); }
   });
 

@@ -11,6 +11,7 @@ function harness(overrides = {}) {
     speak(utterance) { utterances.push(utterance); utterance.onstart?.(); },
     cancel() { this.cancelled = (this.cancelled || 0) + 1; },
   };
+  const activeSynthesis = Object.hasOwn(overrides, "synthesis") ? overrides.synthesis : synthesis;
   const controller = createVoiceSessionController({
     recognitionFactory: () => {
       const item = {
@@ -21,7 +22,7 @@ function harness(overrides = {}) {
       recognizers.push(item);
       return item;
     },
-    synthesis,
+    synthesis: activeSynthesis,
     utteranceFactory: (text) => ({ text, onend: null, onerror: null }),
     onState: (state) => states.push(state),
     onError: (message) => errors.push(message),
@@ -29,7 +30,7 @@ function harness(overrides = {}) {
     restartDelayMs: 1,
     ...overrides,
   });
-  return { controller, recognizers, utterances, states, errors, synthesis };
+  return { controller, recognizers, utterances, states, errors, synthesis: activeSynthesis };
 }
 
 const resultEvent = (...items) => ({ resultIndex: 0, results: items.map(([transcript, isFinal]) => Object.assign([{ transcript }], { isFinal })) });
@@ -265,6 +266,42 @@ test("manual interruption cancels playback and starts one fresh recognition inst
   await tick();
   assert.deepEqual(submitted, ["first question", "my follow up question"]);
   assert.equal(h.utterances[1].text, "Answer: my follow up question");
+  h.controller.stop();
+});
+
+test("speech synthesis resumes and speaks the next answer after manual cancellation", async () => {
+  const capture = audioCaptureHarness();
+  const spoken = [];
+  const submitted = [];
+  let resumeCalls = 0;
+  const speechEngine = {
+    paused: false,
+    speak(utterance) { spoken.push(utterance); utterance.onstart?.(); },
+    cancel() { this.paused = true; this.cancelled = (this.cancelled || 0) + 1; },
+    resume() { resumeCalls += 1; this.paused = false; },
+  };
+  const h = harness({
+    mediaDevices: capture.mediaDevices,
+    audioContextFactory: () => capture.context,
+    synthesis: speechEngine,
+    onUtterance: async (text) => { submitted.push(text); return `Spoken answer: ${text}`; },
+  });
+  h.controller.start();
+  await tick();
+  h.recognizers[0].onresult(resultEvent(["first question", true]));
+  await tick();
+  assert.equal(spoken.length, 1);
+
+  assert.equal(h.controller.interruptAndListen(), true);
+  assert.equal(speechEngine.paused, true);
+  h.recognizers[1].onresult(resultEvent(["follow up question", true]));
+  await tick();
+
+  assert.deepEqual(submitted, ["first question", "follow up question"]);
+  assert.equal(resumeCalls, 1);
+  assert.equal(spoken.length, 2);
+  assert.equal(spoken[1].text, "Spoken answer: follow up question");
+  assert.equal(h.controller.getState(), "SPEAKING");
   h.controller.stop();
 });
 
