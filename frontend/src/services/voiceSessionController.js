@@ -532,13 +532,11 @@ export function createVoiceSessionController({
       lastInterruptionAt = -Infinity;
       vadAboveThreshold = 0;
       vadLastWindow = globalThis.performance?.now?.() ?? Date.now();
+      stopRecognition(true);
+      stopMeter();
+      playbackMonitorRecognition = null;
+      debug("speech-playback-started-with-microphone-released");
       emitState("SPEAKING");
-      if (active && !trackRecognitionUnsupported) {
-        if (meterStream) listen(token, true);
-        else void startMeter(token).then((available) => {
-          if (available && isCurrent(token) && state === "SPEAKING" && !recognition) listen(token, true);
-        });
-      }
     };
     utterance.onend = () => finish(false);
     utterance.onerror = () => finish(true);

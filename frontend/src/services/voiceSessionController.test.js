@@ -251,17 +251,17 @@ test("manual interruption cancels playback and starts one fresh recognition inst
   await tick();
   h.recognizers[0].onresult(resultEvent(["first question", true]));
   await tick();
-  assert.equal(h.recognizers.length, 2);
+  assert.equal(h.recognizers.length, 1, "no recognition monitor should compete with speech playback");
+  assert.equal(capture.track.stopped, true, "the analyser microphone is released during speech playback");
   const oldPlaybackEnd = h.utterances[0].onend;
   assert.equal(h.controller.interruptAndListen(), true);
   oldPlaybackEnd?.();
   assert.equal(h.synthesis.cancelled, 1);
-  assert.equal(h.recognizers[1].aborted, true);
   assert.equal(capture.track.stopped, true);
-  assert.equal(h.recognizers.length, 3);
-  assert.equal(h.recognizers[2].startArgs.length, 0);
+  assert.equal(h.recognizers.length, 2);
+  assert.equal(h.recognizers[1].startArgs.length, 0);
   assert.equal(h.controller.getState(), "LISTENING");
-  h.recognizers[2].onresult(resultEvent(["my follow up question", true]));
+  h.recognizers[1].onresult(resultEvent(["my follow up question", true]));
   await tick();
   assert.deepEqual(submitted, ["first question", "my follow up question"]);
   assert.equal(h.utterances[1].text, "Answer: my follow up question");
@@ -350,25 +350,17 @@ test("manual interruption stays active through repeated answers and ignores spee
   h.recognizers[0].onresult(resultEvent(["first question", true]));
   await tick();
   assert.equal(h.controller.getState(), "SPEAKING");
+  assert.equal(h.recognizers.length, 1, "speech output must not leave a recognizer attached");
 
-  capture.setAmplitude(0.35);
-  await new Promise((resolve) => setTimeout(resolve, 360));
-  assert.equal(h.controller.getState(), "SPEAKING", "microphone energy alone must not stop Tutor speech");
   assert.equal(h.synthesis.cancelled || 0, 0);
 
-  h.recognizers[1].onresult(resultEvent(["question before button", true]));
-  assert.equal(h.controller.getState(), "SPEAKING", "recognition during playback must not auto-submit");
-  assert.deepEqual(submitted, ["first question"]);
-  capture.setAmplitude(0);
-
-  for (const [monitorIndex, nativeIndex, question] of [
-    [2, 3, "second question"],
-    [4, 5, "third question"],
+  for (const [nativeIndex, question] of [
+    [1, "second question"],
+    [2, "third question"],
   ]) {
     assert.equal(h.controller.interruptAndListen(), true);
     await tick();
-    assert.equal(h.synthesis.cancelled, submitted.length);
-    assert.equal(h.recognizers[monitorIndex].aborted, true);
+    assert.equal(h.synthesis.cancelled, nativeIndex);
     assert.equal(capture.track.stopped, true);
     assert.equal(h.recognizers[nativeIndex].startArgs.length, 0, "manual interruption starts a fresh browser microphone recognizer");
     assert.equal(h.controller.getState(), "LISTENING");
@@ -379,7 +371,7 @@ test("manual interruption stays active through repeated answers and ignores spee
       ? ["first question", "second question"]
       : ["first question", "second question", "third question"]);
     assert.equal(h.controller.getState(), "SPEAKING");
-    assert.equal(h.recognizers.length, monitorIndex + 3);
+    assert.equal(h.recognizers.length, nativeIndex + 1, "playback does not start another microphone recognizer");
   }
 
   assert.deepEqual(submitted, ["first question", "second question", "third question"]);
@@ -399,7 +391,7 @@ test("Stop releases the shared audio stream and stale playback callbacks cannot 
   await new Promise((resolve) => setTimeout(resolve, 120));
   assert.equal(capture.track.stopped, true);
   assert.equal(h.controller.getState(), "IDLE");
-  assert.equal(h.recognizers.length, 2);
+  assert.equal(h.recognizers.length, 1);
   assert.equal(h.synthesis.cancelled, 1);
 });
 
