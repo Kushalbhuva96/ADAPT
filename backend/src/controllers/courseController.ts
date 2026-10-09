@@ -15,13 +15,14 @@ const DEFAULT_SUBJECTS = [
 
 export async function generateCourse(req: Request, res: Response, next: NextFunction) {
   try {
+    const requestStartedAt = performance.now();
     const validated = CourseGenerationInputSchema.parse(req.body);
     const userId = validated.userId;
     if (!userId) return res.status(401).json({ message: "Sign in to generate a course." });
 
-    console.log(`[API] Generating course for user ${userId}.`);
     const result = await generateCourseFromAI(validated.learningRequest, userId);
     await Learner.updateOne({ id: userId }, { $set: { activeCourseId: result.course.id, activeTopicId: null } });
+    console.info(`[Performance] Course generation API completed in ${Math.round(performance.now() - requestStartedAt)}ms.`);
 
     res.json(result);
   } catch (error) {

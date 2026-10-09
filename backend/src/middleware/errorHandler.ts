@@ -11,7 +11,7 @@ export function errorHandler(
     const upstream = err.upstreamStatus ?? err.upstreamStatusName ?? "unknown";
     console.error(`[AI] ${err.category || "service"} failure (${err.code}); upstream status ${upstream}.`);
   } else {
-    console.error(`[Error] ${req.method} ${req.url} ->`, err?.message || "Unknown error");
+    console.error(`[Error] ${req.method} request failed (${err?.code || err?.status || "SERVER_ERROR"}).`);
   }
 
   if (err instanceof ZodError) {
@@ -41,6 +41,7 @@ export function errorHandler(
     error: {
       code: err.code || "SERVER_ERROR",
       message,
+      retryable: isAIError && ["provider_unavailable", "network", "timeout"].includes(err.category),
     },
   });
 }

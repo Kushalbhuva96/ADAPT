@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { api } from "./api";
+import { api, clearApiRuntimeState } from "./api";
 
 const AuthContext = createContext(null);
 
@@ -8,6 +8,7 @@ export function AuthProvider({ children }) {
   const [checking, setChecking] = useState(true);
 
   const clearSession = useCallback(() => {
+    clearApiRuntimeState();
     for (const storage of [localStorage, sessionStorage]) {
       for (let index = storage.length - 1; index >= 0; index -= 1) {
         const key = storage.key(index);
@@ -18,6 +19,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   const setSession = useCallback((token, nextUser) => {
+    clearApiRuntimeState();
     localStorage.setItem("adapt_token", token);
     localStorage.setItem("adapt_user", JSON.stringify(nextUser));
     setUser(nextUser);

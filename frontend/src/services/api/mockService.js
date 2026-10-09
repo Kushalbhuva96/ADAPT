@@ -121,18 +121,44 @@ export const mockService = {
     const courseTopics = course?.topics?.length ? course.topics : topics.filter((topic) => topic.subjectId === course?.subject?.id);
     const courseQuestions = questions.filter((question) => courseTopics.some((topic) => topic.id === question.topicId));
     const activeTopicQuestions = activeTopicId ? courseQuestions.filter((question) => question.topicId === activeTopicId) : [];
-    const pool = activeTopicQuestions.length ? activeTopicQuestions : courseQuestions.length ? courseQuestions : [];
     const topic = courseTopics.find((item) => item.id === activeTopicId) || courseTopics[0] || topics[2];
-    const q = pool.length ? pool[(course?.topicAttempts?.[activeTopicId] || 0) % pool.length] : {
-      id: `practice_${topic.id}`, topicId: topic.id, difficulty: "easy", question: `Which statement best describes ${topic.name}?`,
-      options: [{ id: "a", text: `A core concept in ${topic.name}` }, { id: "b", text: "A file storage format" }, { id: "c", text: "A user interface color" }, { id: "d", text: "An unrelated network protocol" }], correctOptionId: "a", explanation: `${topic.name} is a core module in your course.`
+    const deliveredQuestionIds = new Set(course?.practiceDeliveredQuestionIds?.[topic.id] || []);
+    const topicAttemptIds = new Set([
+      ...state.attempts.filter((attempt) => attempt.topicId === topic.id).map((attempt) => attempt.questionId),
+      ...deliveredQuestionIds,
+    ]);
+    const availableTopicQuestions = activeTopicQuestions.filter((question) => !topicAttemptIds.has(question.id));
+    const pool = availableTopicQuestions;
+    const topicAttemptCount = Math.max(state.attempts.filter((attempt) => attempt.topicId === topic.id).length, course?.topicAttempts?.[topic.id] || 0);
+    const topicDeliveryCount = deliveredQuestionIds.size;
+    const questionNumber = Math.max(topicAttemptCount, topicDeliveryCount) + 1;
+    const fallbackPrompts = [
+      `Which statement best describes the central goal of ${topic.name}?`,
+      `A learner is working on ${topic.name}. Which next step best applies its core ideas?`,
+      `Which result best shows progress in ${topic.name}?`,
+      `When facing a new problem in ${topic.name}, what should a learner do first?`,
+    ];
+    const q = pool.length ? pool[0] : {
+      id: `practice_${topic.id}_${questionNumber}`, topicId: topic.id, difficulty: "easy",
+      question: fallbackPrompts[(questionNumber - 1) % fallbackPrompts.length],
+      options: [{ id: "a", text: `Apply a relevant principle from ${topic.name}.` }, { id: "b", text: "Ignore the requirements of the problem." }, { id: "c", text: "Use an unrelated tool without checking its purpose." }, { id: "d", text: "Repeat a memorized answer without considering the context." }],
+      correctOptionId: "a", explanation: `${topic.name} is best understood by applying its core ideas to a relevant problem.`
     };
+    if (course) {
+      saveCourse({
+        ...course,
+        practiceDeliveredQuestionIds: {
+          ...(course.practiceDeliveredQuestionIds || {}),
+          [topic.id]: [...new Set([...(course.practiceDeliveredQuestionIds?.[topic.id] || []), q.id])],
+        },
+      });
+    }
     return delay({...q, adaptiveContext:{accuracy:topic.accuracy,topicMastery:topic.mastery,reason:"Your recent accuracy indicates this concept needs reinforcement.",strategy:state.attempts.length%2?"example_first":"foundation_first"}});
   },
   async answerPractice({questionId,selectedOptionId,timeTakenSeconds=0}){
     const activeCourse = getActiveCourse();
     const courseTopics = activeCourse?.topics?.length ? activeCourse.topics : topics.filter((item) => item.subjectId === activeCourse?.subject?.id);
-    const q=questions.find(x=>x.id===questionId)||{ id: questionId, topicId: courseTopics.find((topic) => questionId === `practice_${topic.id}`)?.id || activeCourse?.activeTopicId, correctOptionId:"a", explanation:"Review this module's core concept, then try applying it in a new example." };
+    const q=questions.find(x=>x.id===questionId)||{ id: questionId, topicId: courseTopics.find((topic) => questionId.startsWith(`practice_${topic.id}_`))?.id || activeCourse?.activeTopicId, correctOptionId:"a", explanation:"Review this module's core concept, then try applying it in a new example." };
     const correct=q.correctOptionId===selectedOptionId;
     state.attempts.push({questionId,selectedOptionId,correct,timeTakenSeconds,topicId:q.topicId});
     const topic=topics.find(t=>t.id===q.topicId);

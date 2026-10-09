@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { ArrowRight, Clock3, Eye, EyeOff, LogIn, Sparkles, UserPlus } from "lucide-react";
+import React, { useRef, useState } from "react";
+import { ArrowRight, Eye, EyeOff, LogIn, Sparkles, UserPlus } from "lucide-react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import Brand from "../components/ui/Brand";
 import AIOrb from "../components/ui/AIOrb";
@@ -15,8 +15,9 @@ export default function Onboarding() {
   const [form, setForm] = useState({ name: "", email: "", password: "" });
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [processingStep, setProcessingStep] = useState(0);
   const [error, setError] = useState("");
+  const [retryable, setRetryable] = useState(false);
+  const courseRequestInFlight = useRef(false);
   const navigate = useNavigate();
 
   const submitAuth = async (event) => {
@@ -39,19 +40,23 @@ export default function Onboarding() {
 
   const createCourse = async (event) => {
     event.preventDefault();
+    if (courseRequestInFlight.current) return;
     if (!learningRequest.trim()) { setError("Tell us what you'd like to learn."); return; }
-    setError(""); setBusy(true); setProcessingStep(0);
-    const timer = setInterval(() => setProcessingStep((stage) => Math.min(2, stage + 1)), 650);
+    courseRequestInFlight.current = true;
+    setError(""); setRetryable(false); setBusy(true);
+    const startedAt = performance.now();
     try {
       const response = await api.generateCourse({ learningRequest: learningRequest.trim() });
+      console.info(`[Performance] Course generation request completed in ${Math.round(performance.now() - startedAt)}ms.`);
       const course = saveCourse({ ...response.course, learningRequest: learningRequest.trim(), understanding: response.understanding, selectedTopicId: null, status: "setup", progress: 0, completedTopicIds: [] });
       localStorage.setItem("adapt_active_course_id", course.id);
       sessionStorage.removeItem("adapt_course_request");
       localStorage.removeItem("adapt_assessment");
       navigate("/course", { replace: true });
     } catch (err) {
+      setRetryable(Boolean(err.retryable));
       setError(navigator.onLine ? (err.message || "ADAPT couldn't generate this right now. Please try again.") : "Course generation requires an internet connection.");
-    } finally { clearInterval(timer); setBusy(false); }
+    } finally { courseRequestInFlight.current = false; setBusy(false); }
   };
 
   return <div className="landing" style={{ minHeight: "100vh" }}>
@@ -77,8 +82,8 @@ export default function Onboarding() {
           <textarea id="learning-request" className="learning-request" value={learningRequest} onChange={(event) => { setLearningRequest(event.target.value); sessionStorage.setItem("adapt_course_request", event.target.value); }} placeholder="I want to learn Operating Systems, especially CPU scheduling and deadlocks." rows={5} maxLength={600} />
           <div className="tiny" style={{ textAlign: "right", marginTop: 5 }}>{learningRequest.length}/600</div>
           {error && <div className="form-error" role="alert" style={{ marginTop: 16 }}>{error}</div>}
-          {busy && <div className="insight" role="status" style={{ marginTop: 18 }}><Sparkles size={16} /><div><strong>{["Understanding your learning goal...", "Finding relevant topics...", "Building your course..."][processingStep]}</strong><div className="mini" style={{ marginTop: 5 }}>Building your personalized course...</div></div></div>}
-          <button className="btn btn-primary" style={{ marginTop: 22 }} disabled={busy || !learningRequest.trim()}>{busy ? "Creating your course..." : "Create My Course"} <ArrowRight size={15} /></button>
+          {busy && <div className="insight" role="status" style={{ marginTop: 18 }}><Sparkles size={16} /><div><strong>Generating your course with ADAPT…</strong><div className="mini" style={{ marginTop: 5 }}>This can take a little while while Gemini prepares and validates the course.</div></div></div>}
+          <button className="btn btn-primary" style={{ marginTop: 22 }} disabled={busy || !learningRequest.trim()}>{busy ? "Creating your course..." : retryable ? "Retry course generation" : "Create My Course"} <ArrowRight size={15} /></button>
         </form>
         <Link className="btn" style={{ marginTop: 15 }} to="/dashboard">Return to Dashboard</Link>
       </>}

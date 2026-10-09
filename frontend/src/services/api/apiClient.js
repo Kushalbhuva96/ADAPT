@@ -33,7 +33,15 @@ async function request(path, options = {}) {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(options.headers || {}),
   };
-  const response = await fetch(`${BASE_URL}${path}`, { ...options, headers });
+  let response;
+  try {
+    response = await fetch(`${BASE_URL}${path}`, { ...options, headers });
+  } catch (cause) {
+    const error = new Error("ADAPT could not reach the server. Check your connection and retry.");
+    error.retryable = true;
+    error.cause = cause;
+    throw error;
+  }
   const data = await response.json().catch(() => ({ message: "Unexpected server response" }));
   if (response.status === 401) {
     // Clear stale session and let the app handle redirect
@@ -41,7 +49,13 @@ async function request(path, options = {}) {
     localStorage.removeItem("adapt_user");
     window.dispatchEvent(new Event("adapt:unauthorized"));
   }
-  if (!response.ok) throw new Error(data.message || "Request failed");
+  if (!response.ok) {
+    const error = new Error(data.message || "Request failed");
+    error.code = data.error?.code;
+    error.status = response.status;
+    error.retryable = data.error?.retryable ?? (response.status >= 500 || response.status === 429);
+    throw error;
+  }
   return data;
 }
 

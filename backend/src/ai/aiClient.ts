@@ -139,12 +139,10 @@ function classifyProviderError(error: unknown): AIServiceError {
   if (status === 401 || status === 403 || /api.?key|unauthenticated|unauthorized|permission denied|invalid credential/.test(detail)) {
     return new AIServiceError("Gemini authentication failed. Check AI_API_KEY.", "AI_AUTHENTICATION_FAILED", 502, "authentication", status, metadata.statusName);
   }
-  // A 429 is a bounded, fallback-eligible provider response. It can indicate a
-  // per-model rate limit, which may clear on retry or permit the alternate model.
-  // Preserve clearly identified quota exhaustion without a retry when the SDK
-  // does not expose a usable HTTP status.
-  if (status !== 429 && /quota exceeded|rate limit|resource exhausted|too many requests/.test(detail)) {
-    return new AIServiceError("Gemini quota or rate limit was reached. Check the Google AI quota for this key.", "AI_QUOTA_EXCEEDED", 503, "quota", status, metadata.statusName);
+  // Rate limits can represent exhausted daily quota. Do not spend another
+  // primary-model request on a 429; the shared request path should try fallback.
+  if (status === 429 || /quota exceeded|rate limit|resource exhausted|too many requests/.test(detail)) {
+    return new AIServiceError("Gemini rate limit was reached. Trying the configured fallback model.", "AI_RATE_LIMITED", 503, "rate_limited", status, metadata.statusName);
   }
   if (/model.*(not found|not available|unsupported)|not found.*model/.test(detail) || status === 404) {
     return new AIServiceError("The configured Gemini model is unavailable to this API key.", "AI_MODEL_UNAVAILABLE", 503, "model", status, metadata.statusName);
@@ -178,7 +176,7 @@ function validateOutput<T>(raw: string, validator?: (data: any) => T): T {
   return validator ? validator(parsed) : parsed as T;
 }
 
-/** Primary gets the existing bounded retry. A second transient 503 uses the configured fallback once. */
+/** Try primary once for rate limits, otherwise at most twice; use fallback at most once. */
 export async function generateStructuredAIResponse<T>(
   systemPrompt: string,
   userPrompt: string,
@@ -186,9 +184,51 @@ export async function generateStructuredAIResponse<T>(
   responseJsonSchema?: AIJsonSchema
 ): Promise<T> {
   const aiProvider = getAIProvider();
+  const generationStartedAt = performance.now();
   const primaryModel = process.env.AI_MODEL!.trim();
   const fallbackModel = process.env.AI_FALLBACK_MODEL!.trim();
   let invalidPrimaryOutput: unknown;
+
+  const tryFallback = async (): Promise<T> => {
+    console.warn(`[AI] Trying configured fallback (${fallbackModel}).`);
+    try {
+      const fallbackStartedAt = performance.now();
+      const fallbackRaw = await aiProvider.generateJson(systemPrompt, userPrompt, responseJsonSchema, fallbackModel);
+      console.info(`[Performance] Gemini fallback response completed in ${Math.round(performance.now() - fallbackStartedAt)}ms.`);
+      const value = validateOutput(fallbackRaw, validator);
+      console.info(`[Performance] Structured AI request completed in ${Math.round(performance.now() - generationStartedAt)}ms.`);
+      return value;
+    } catch (fallbackError) {
+      if (fallbackError instanceof AIServiceError && fallbackError.category === "invalid_response" || isInvalidOutput(fallbackError)) {
+        const invalidResponse = fallbackError instanceof AIServiceError
+          ? fallbackError
+          : new AIServiceError(
+            "Gemini returned content that did not match the required response schema.",
+            "AI_INVALID_RESPONSE",
+            502,
+            "invalid_response"
+          );
+        console.error(`[AI] Final failure (${invalidResponse.code}); fallback response was invalid.`);
+        throw invalidResponse;
+      }
+      const finalError = fallbackError instanceof AIServiceError
+        ? fallbackError
+        : classifyProviderError(fallbackError);
+      if (["provider_unavailable", "network", "timeout", "rate_limited"].includes(finalError.category)) {
+        console.error(`[AI] Final failure (${finalError.code}); primary and fallback were unavailable.`);
+        throw new AIServiceError(
+          "Gemini is temporarily unavailable. Please try again shortly.",
+          "AI_PROVIDER_UNAVAILABLE",
+          503,
+          "provider_unavailable",
+          finalError.upstreamStatus,
+          finalError.upstreamStatusName
+        );
+      }
+      console.error(`[AI] Final failure (${finalError.code}); fallback returned a non-retryable error.`);
+      throw finalError;
+    }
+  };
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const retryHint = attempt === 2 && invalidPrimaryOutput
@@ -196,13 +236,21 @@ export async function generateStructuredAIResponse<T>(
       : "";
 
     try {
+      console.info(`[AI] Primary attempt ${attempt}/2 (${primaryModel}).`);
+      const providerStartedAt = performance.now();
       const raw = await aiProvider.generateJson(systemPrompt + retryHint, userPrompt, responseJsonSchema, primaryModel);
+      console.info(`[Performance] Gemini response completed in ${Math.round(performance.now() - providerStartedAt)}ms.`);
       try {
-        return validateOutput(raw, validator);
+        const value = validateOutput(raw, validator);
+        console.info(`[Performance] Structured AI request completed in ${Math.round(performance.now() - generationStartedAt)}ms.`);
+        return value;
       } catch (error) {
         if (!isInvalidOutput(error)) throw error;
         invalidPrimaryOutput = error;
-        if (attempt === 1) continue;
+        if (attempt === 1) {
+          console.warn("[AI] Primary response did not match the required schema; retrying once with a correction hint.");
+          continue;
+        }
         throw new AIServiceError(
           "Gemini returned content that did not match the required response schema.",
           "AI_INVALID_RESPONSE",
@@ -211,47 +259,26 @@ export async function generateStructuredAIResponse<T>(
         );
       }
     } catch (error) {
-      if (error instanceof AIServiceError && error.category === "invalid_response") throw error;
+      if (error instanceof AIServiceError && error.category === "invalid_response") {
+        console.error(`[AI] Final failure (${error.code}); primary response did not satisfy the required schema.`);
+        throw error;
+      }
       const serviceError = error instanceof AIServiceError ? error : classifyProviderError(error);
 
-      if (serviceError.category === "provider_unavailable") {
-        if (attempt === 1) continue;
-        try {
-          const upstream = serviceError.upstreamStatus
-            ? `HTTP ${serviceError.upstreamStatus}`
-            : serviceError.upstreamStatusName || "status unavailable";
-          console.warn(`[AI] Primary model failed with ${serviceError.code} (${upstream}) after retry; trying configured fallback (${fallbackModel}).`);
-          const fallbackRaw = await aiProvider.generateJson(systemPrompt, userPrompt, responseJsonSchema, fallbackModel);
-          try {
-            return validateOutput(fallbackRaw, validator);
-          } catch (fallbackValidationError) {
-            if (isInvalidOutput(fallbackValidationError)) {
-              throw new AIServiceError(
-                "Gemini returned content that did not match the required response schema.",
-                "AI_INVALID_RESPONSE",
-                502,
-                "invalid_response"
-              );
-            }
-            throw fallbackValidationError;
-          }
-        } catch (fallbackError) {
-          if (fallbackError instanceof AIServiceError && fallbackError.category === "invalid_response") throw fallbackError;
-          const fallbackMetadata = fallbackError instanceof AIServiceError
-            ? fallbackError
-            : classifyProviderError(fallbackError);
-          throw new AIServiceError(
-            "Gemini is temporarily unavailable. Please try again shortly.",
-            "AI_PROVIDER_UNAVAILABLE",
-            503,
-            "provider_unavailable",
-            fallbackMetadata.upstreamStatus,
-            fallbackMetadata.upstreamStatusName
-          );
-        }
+      if (serviceError.category === "rate_limited") {
+        console.warn(`[AI] Primary model rate-limited (${serviceError.upstreamStatus ? `HTTP ${serviceError.upstreamStatus}` : serviceError.upstreamStatusName || "quota/rate limit"}); skipping primary retry.`);
+        return tryFallback();
       }
 
-      if (["network", "timeout"].includes(serviceError.category) && attempt === 1) continue;
+      const transientCategories = ["provider_unavailable", "network", "timeout"];
+      if (transientCategories.includes(serviceError.category) && attempt === 1) {
+        console.warn(`[AI] Primary attempt failed with ${serviceError.code}; retrying once after 350ms.`);
+        await new Promise((resolve) => setTimeout(resolve, 350));
+        continue;
+      }
+      if (transientCategories.includes(serviceError.category)) return tryFallback();
+
+      console.error(`[AI] Final failure (${serviceError.code}); primary error is non-retryable.`);
       throw serviceError;
     }
   }

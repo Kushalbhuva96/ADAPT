@@ -12,6 +12,15 @@ export default function StudyPlan() {
     try { const updated = await api.completePlanItem(null, itemId); setPlan((current) => ({ ...current, ...updated, status: "ready" })); }
     catch (err) { setError(err.message); }
   };
+  const pendingItems = plan?.items?.filter((item) => item.status !== "completed") || [];
+  const completedItems = plan?.items?.filter((item) => item.status === "completed") || [];
+  const nextAction = pendingItems[0];
+  const upcoming = pendingItems.slice(1);
+  const groupedUpcoming = [
+    { title: "UPCOMING", items: upcoming.filter((item) => !["review", "practice", "recall"].includes(item.type.toLowerCase())) },
+    { title: "REVIEW", items: upcoming.filter((item) => ["review", "recall", "reinforce"].includes(item.type.toLowerCase())) },
+    { title: "PRACTICE", items: upcoming.filter((item) => item.type.toLowerCase() === "practice") },
+  ].filter((group) => group.items.length);
 
   return <AppShell breadcrumb="STUDY PLAN"><div className="page">
     <div className="eyebrow">PERSONALIZED STUDY PLAN</div><h1 className="page-title" style={{ marginTop: 8 }}>Your Study Plan</h1>
@@ -19,11 +28,16 @@ export default function StudyPlan() {
     {!plan && !error && <div className="card card-pad" style={{ marginTop: 20 }}>Loading saved learner context…</div>}
     {plan?.status === "not_ready" && <div className="card card-pad glow" style={{ marginTop: 20 }}><h2 style={{ fontSize: 20 }}>Your study plan will form as you learn.</h2><p className="mini" style={{ marginTop: 7 }}>{plan.course ? "Complete the course level assessment to get a plan based on your results." : "Create a course and complete its level assessment to get a plan based on your results."}</p><Link className="btn btn-primary" style={{ marginTop: 14 }} to={plan.course ? "/assessment" : "/course"}>{plan.course ? "Take Level Assessment" : "Open Course"} <ArrowRight size={14} /></Link></div>}
     {plan?.status === "ready" && <>
-      <p className="page-subtitle">{plan.totalMinutes} minutes · based on your saved {plan.course.title} assessment and current recommendation.</p>
-      <section className="card card-pad" style={{ marginTop: 22 }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}><div><div className="eyebrow">CURRENT FOCUS · {plan.course.title}</div><h2 style={{ fontSize: 22, marginTop: 7 }}>{plan.topic.name}</h2></div><span className="badge">{plan.items.filter((item) => item.status === "completed").length}/{plan.items.length} COMPLETE</span></div>
-        <div className="timeline"><div className="timeline-grid">{plan.items.map((item, index) => <div key={item.id} style={{ opacity: item.status === "completed" ? .65 : 1 }}><button className="step-dot" onClick={() => complete(item.id)} disabled={item.status === "completed"}>{item.status === "completed" ? <Check size={12} /> : String(index + 1).padStart(2, "0")}</button><div style={{ fontSize: 10, fontWeight: 700, marginTop: 7 }}>{item.title}</div><div className="mini" style={{ marginTop: 5, display: "flex", alignItems: "center", gap: 4 }}><Clock3 size={10} /> {item.durationMinutes} min · {item.type}</div></div>)}</div></div>
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 9, marginTop: 25 }}><Link className="btn" to="/learning-dna">View Learning DNA</Link><Link className="btn btn-primary" to="/practice"><Play size={14} /> Challenge Me <ArrowRight size={14} /></Link></div>
+      <p className="page-subtitle">{plan.totalMinutes} minutes planned for {plan.course.title}, using your active topic and saved assessment.</p>
+      <section className="card card-pad study-priority" style={{ marginTop: 22 }}>
+        <div className="study-priority-head"><div><div className="eyebrow">TODAY · CURRENT PRIORITY</div><h2 style={{ fontSize: "clamp(20px, 5vw, 26px)", marginTop: 8 }}>{plan.topic.name}</h2></div><span className="badge">{completedItems.length}/{plan.items.length} COMPLETE</span></div>
+        <div className="study-reason"><div className="eyebrow">WHY THIS MATTERS</div><p className="mini" style={{ marginTop: 6 }}>ADAPT selected this active topic from your saved assessment and current course focus.</p></div>
+        {nextAction ? <div className="study-next-action"><div><div className="eyebrow">NEXT ACTION · {nextAction.type.toUpperCase()}</div><h3 style={{ fontSize: 17, marginTop: 6 }}>{nextAction.title}</h3><div className="mini" style={{ marginTop: 5 }}><Clock3 size={12} /> {nextAction.durationMinutes} minutes</div></div><div className="study-actions">{nextAction.type === "practice" && <Link className="btn" to="/practice"><Play size={14} /> Practice</Link>}<button className="btn btn-primary" onClick={() => complete(nextAction.id)}><Check size={14} /> Mark complete</button></div></div> : <div className="study-next-action"><div><div className="eyebrow">PLAN COMPLETE</div><p className="mini" style={{ marginTop: 6 }}>All saved actions in this plan are complete.</p></div></div>}
       </section>
+
+      {groupedUpcoming.map((group) => <section className="card card-pad study-section" style={{ marginTop: 14 }} key={group.title}><div className="eyebrow">{group.title}</div><div className="study-list">{group.items.map((item) => <article className="study-item" key={item.id}><span className="study-index">{item.type === "practice" ? <Play size={13} /> : <Clock3 size={13} />}</span><div className="study-item-copy"><strong>{item.title}</strong><span className="mini">{item.type} · {item.durationMinutes} min</span></div><button className="btn" onClick={() => complete(item.id)}>Complete</button></article>)}</div></section>)}
+      {completedItems.length > 0 && <section className="card card-pad study-section" style={{ marginTop: 14 }}><div className="eyebrow">COMPLETED</div><div className="study-list">{completedItems.map((item) => <article className="study-item is-complete" key={item.id}><span className="study-index"><Check size={14} /></span><div className="study-item-copy"><strong>{item.title}</strong><span className="mini">{item.type} · {item.durationMinutes} min</span></div><span className="badge">DONE</span></article>)}</div></section>}
+      <div className="study-footer"><Link className="btn" to="/learning-dna">View Learning DNA</Link><Link className="btn btn-primary" to="/practice"><Play size={14} /> Challenge Me <ArrowRight size={14} /></Link></div>
     </>}
   </div></AppShell>;
 }

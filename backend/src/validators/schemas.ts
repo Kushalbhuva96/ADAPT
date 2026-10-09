@@ -146,5 +146,6 @@ export const TutorMessageSchema = z.object({
   topicId: z.string().optional(),
   topicName: z.string().optional(),
   courseName: z.string().optional(),
+  history: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(1200) })).max(8).optional(),
   userId: z.string().optional(),
 });

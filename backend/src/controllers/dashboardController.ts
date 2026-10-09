@@ -12,20 +12,19 @@ export async function getDashboard(req: Request, res: Response, next: NextFuncti
     const learner = await Learner.findOne({ id: userId });
     if (!learner) return res.status(404).json({ message: "Learner not found." });
 
-    const [progress, rec, practiceCount, correctPracticeCount] = await Promise.all([
+    const [progress, rec, practiceCount, correctPracticeCount, activeCourse] = await Promise.all([
       Progress.findOne({ userId }),
       Recommendation.findOne({ userId }).sort({ createdAt: -1 }),
       PracticeAttempt.countDocuments({ userId }),
       PracticeAttempt.countDocuments({ userId, correct: true }),
+      learner.activeCourseId
+        ? Course.findOne({ id: learner.activeCourseId, userId })
+        : Course.findOne({ userId }).sort({ updatedAt: -1 }),
     ]);
-    let activeCourse = learner.activeCourseId ? await Course.findOne({ id: learner.activeCourseId, userId }) : null;
-    if (!activeCourse && !learner.activeCourseId) {
-      activeCourse = await Course.findOne({ userId }).sort({ updatedAt: -1 });
-      if (activeCourse) {
-        learner.activeCourseId = activeCourse.id;
-        learner.activeTopicId = activeCourse.activeTopicId || activeCourse.recommendedTopicId || null;
-        await learner.save();
-      }
+    if (activeCourse && !learner.activeCourseId) {
+      learner.activeCourseId = activeCourse.id;
+      learner.activeTopicId = activeCourse.activeTopicId || activeCourse.recommendedTopicId || null;
+      await learner.save();
     }
     const assessment = activeCourse
       ? await AssessmentAttempt.findOne({ userId, courseId: activeCourse.id, result: { $exists: true } }).sort({ createdAt: -1 })

@@ -1,17 +1,28 @@
 import { apiClient } from "./apiClient";
 import { mockService } from "./mockService";
+import { cachedRequest, clearRuntimeCache } from "../runtimeCache";
 
 const svc = () => (apiClient.USE_MOCK ? mockService : null);
 const uid = () => apiClient.requireUserId();
 const pendingAssessments = new Map();
+const cacheScope = () => `learner:${uid()}`;
+const invalidateLearner = () => clearRuntimeCache(cacheScope());
+
+export function clearApiRuntimeState() {
+  clearRuntimeCache();
+  pendingAssessments.clear();
+}
 
 function loadAssessment(courseId, topicId) {
   const key = `${apiClient.getToken() || "mock"}:${courseId}:${topicId || "course"}`;
-  if (pendingAssessments.has(key)) return pendingAssessments.get(key);
-  const request = svc()?.assessment?.(courseId, topicId) ?? apiClient.request(`/courses/${encodeURIComponent(courseId)}/assessment?userId=${encodeURIComponent(uid())}${topicId ? `&topicId=${encodeURIComponent(topicId)}` : ""}`);
-  pendingAssessments.set(key, request);
-  request.then(() => pendingAssessments.delete(key), () => pendingAssessments.delete(key));
-  return request;
+  return cachedRequest(`${cacheScope()}:assessment:${courseId}:${topicId || "course"}`, () => {
+    if (pendingAssessments.has(key)) return pendingAssessments.get(key);
+    const request = svc()?.assessment?.(courseId, topicId) ?? apiClient.request(`/courses/${encodeURIComponent(courseId)}/assessment?userId=${encodeURIComponent(uid())}${topicId ? `&topicId=${encodeURIComponent(topicId)}` : ""}`);
+    pendingAssessments.set(key, request);
+    const clearPending = () => { if (pendingAssessments.get(key) === request) pendingAssessments.delete(key); };
+    request.then(clearPending, clearPending);
+    return request;
+  }, 15_000);
 }
 
 export const api = {
@@ -22,36 +33,36 @@ export const api = {
   me: () => svc()?.me() ?? apiClient.request(`/auth/me?userId=${uid()}`),
 
   // Courses
-  courses: () => svc()?.courses?.() ?? apiClient.request(`/courses?userId=${encodeURIComponent(uid())}`),
-  course: (courseId) => svc()?.course?.(courseId) ?? apiClient.request(`/courses/${encodeURIComponent(courseId)}?userId=${encodeURIComponent(uid())}`),
-  activateCourse: (courseId) => svc()?.activateCourse?.(courseId) ?? apiClient.request(`/courses/${encodeURIComponent(courseId)}/activate`, { method: "POST", body: JSON.stringify({ userId: uid() }) }),
-  deleteCourse: (courseId) => apiClient.request(`/courses/${encodeURIComponent(courseId)}`, { method: "DELETE" }),
-  activateTopic: (courseId, topicId) => svc()?.activateTopic?.(courseId, topicId) ?? apiClient.request(`/courses/${encodeURIComponent(courseId)}/topics/${encodeURIComponent(topicId)}/activate`, { method: "POST", body: JSON.stringify({ userId: uid() }) }),
-  generateCourse: (p) => svc()?.generateCourse(p) ?? apiClient.request("/course/generate", { method: "POST", body: JSON.stringify({ ...p, userId: uid() }) }),
+  courses: () => cachedRequest(`${cacheScope()}:courses`, () => svc()?.courses?.() ?? apiClient.request(`/courses?userId=${encodeURIComponent(uid())}`), 30_000),
+  course: (courseId) => cachedRequest(`${cacheScope()}:course:${courseId}`, () => svc()?.course?.(courseId) ?? apiClient.request(`/courses/${encodeURIComponent(courseId)}?userId=${encodeURIComponent(uid())}`), 5 * 60_000),
+  activateCourse: async (courseId) => { const value = await (svc()?.activateCourse?.(courseId) ?? apiClient.request(`/courses/${encodeURIComponent(courseId)}/activate`, { method: "POST", body: JSON.stringify({ userId: uid() }) })); invalidateLearner(); return value; },
+  deleteCourse: async (courseId) => { const value = await apiClient.request(`/courses/${encodeURIComponent(courseId)}`, { method: "DELETE" }); invalidateLearner(); return value; },
+  activateTopic: async (courseId, topicId) => { const value = await (svc()?.activateTopic?.(courseId, topicId) ?? apiClient.request(`/courses/${encodeURIComponent(courseId)}/topics/${encodeURIComponent(topicId)}/activate`, { method: "POST", body: JSON.stringify({ userId: uid() }) })); invalidateLearner(); return value; },
+  generateCourse: async (p) => { const value = await (svc()?.generateCourse(p) ?? apiClient.request("/course/generate", { method: "POST", body: JSON.stringify({ ...p, userId: uid() }) })); invalidateLearner(); return value; },
   subjects: () => svc()?.subjectCatalog() ?? apiClient.request("/subjects"),
 
   // Diagnostic Assessment
   diagnosticQuestions: (p) => svc()?.diagnosticQuestions(p) ?? apiClient.request(`/courses/${p.subjectId}/diagnostic`, { method: "POST", body: JSON.stringify(p) }),
   assessment: loadAssessment,
-  saveAssessmentProgress: (assessmentId, answers) => svc()?.saveAssessmentProgress?.(assessmentId, answers) ?? apiClient.request(`/assessments/${encodeURIComponent(assessmentId)}/progress`, { method: "PUT", body: JSON.stringify({ answers, userId: uid() }) }),
-  evaluateDiagnostic: (p) => svc()?.evaluateDiagnostic(p) ?? apiClient.request("/assessment/diagnostic", { method: "POST", body: JSON.stringify({ ...p, userId: uid() }) }),
+  saveAssessmentProgress: async (assessmentId, answers) => { const value = await (svc()?.saveAssessmentProgress?.(assessmentId, answers) ?? apiClient.request(`/assessments/${encodeURIComponent(assessmentId)}/progress`, { method: "PUT", body: JSON.stringify({ answers, userId: uid() }) })); invalidateLearner(); return value; },
+  evaluateDiagnostic: async (p) => { const value = await (svc()?.evaluateDiagnostic(p) ?? apiClient.request("/assessment/diagnostic", { method: "POST", body: JSON.stringify({ ...p, userId: uid() }) })); invalidateLearner(); return value; },
 
   // Practice
   nextPractice: (_id) => svc()?.nextPractice(_id) ?? apiClient.request(`/practice/next/${uid()}`),
-  answerPractice: (p) => svc()?.answerPractice(p) ?? apiClient.request("/practice/answer", { method: "POST", body: JSON.stringify({ ...p, userId: uid() }) }),
+  answerPractice: async (p) => { const value = await (svc()?.answerPractice(p) ?? apiClient.request("/practice/answer", { method: "POST", body: JSON.stringify({ ...p, userId: uid() }) })); invalidateLearner(); return value; },
 
   // Tutor
   tutorMessage: (p) => svc()?.tutorMessage(p) ?? apiClient.request("/tutor/message", { method: "POST", body: JSON.stringify({ ...p, userId: uid() }) }),
 
   // Dashboard & Progress
-  dashboard: (_id) => svc()?.dashboard(_id) ?? apiClient.request(`/dashboard/${uid()}`),
+  dashboard: (_id) => cachedRequest(`${cacheScope()}:dashboard`, () => svc()?.dashboard(_id) ?? apiClient.request(`/dashboard/${uid()}`), 10_000),
   profile: (_id) => svc()?.profile(_id) ?? apiClient.request(`/profile/${uid()}`),
-  progress: (_id) => svc()?.progress(_id) ?? apiClient.request(`/progress/${uid()}`),
+  progress: (_id) => cachedRequest(`${cacheScope()}:progress`, () => svc()?.progress(_id) ?? apiClient.request(`/progress/${uid()}`), 15_000),
   sync: (_id) => svc()?.sync(_id) ?? apiClient.request(`/sync/${uid()}`, { method: "POST" }),
 
   // Study Plan
-  studyPlan: (_id) => svc()?.studyPlan(_id) ?? apiClient.request(`/study-plan/${uid()}`),
-  completePlanItem: (_userId, itemId) => svc()?.completePlanItem(itemId) ?? apiClient.request(`/study-plan/${uid()}/item/${itemId}/complete`, { method: "POST" }),
+  studyPlan: (_id) => cachedRequest(`${cacheScope()}:study-plan`, () => svc()?.studyPlan(_id) ?? apiClient.request(`/study-plan/${uid()}`), 30_000),
+  completePlanItem: async (_userId, itemId) => { const value = await (svc()?.completePlanItem(itemId) ?? apiClient.request(`/study-plan/${uid()}/item/${itemId}/complete`, { method: "POST" })); invalidateLearner(); return value; },
 
   // Recommendations
   recommendations: (_id) => svc()?.getRecommendations(_id) ?? apiClient.request(`/recommendations/${uid()}`),

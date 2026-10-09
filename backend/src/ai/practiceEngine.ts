@@ -4,18 +4,23 @@ import { Learner } from "../models/Learner.js";
 import { PracticeAttempt } from "../models/PracticeAttempt.js";
 import { Progress } from "../models/Progress.js";
 import { AssessmentAttempt } from "../models/AssessmentAttempt.js";
+import { PracticeSubmission } from "../models/PracticeSubmission.js";
+import { PracticeQuestionDelivery } from "../models/PracticeQuestionDelivery.js";
 import { generateStructuredAIResponse } from "./aiClient.js";
 import { AIDiagnosticQuestionJsonSchema, AIDiagnosticQuestionSchema } from "../validators/schemas.js";
 
 const TOPIC_LEARNING_STATES = ["UNLOCKED", "LEARNING", "NEEDS_IMPROVEMENT", "STRONG"];
+const normalizeQuestionText = (value: string) => value.toLocaleLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
 export async function getNextPracticeQuestion(userId: string) {
   const learner = await Learner.findOne({ id: userId });
   if (!learner) throw Object.assign(new Error("Learner not found."), { status: 404, code: "LEARNER_NOT_FOUND" });
   let activeCourseId = learner.activeCourseId;
+  let fallbackCourse = null;
   if (!activeCourseId) {
     const latestCourse = await Course.findOne({ userId }).sort({ updatedAt: -1 });
     if (latestCourse) {
+      fallbackCourse = latestCourse;
       learner.activeCourseId = latestCourse.id;
       learner.activeTopicId = latestCourse.activeTopicId || latestCourse.recommendedTopicId || null;
       await learner.save();
@@ -23,13 +28,14 @@ export async function getNextPracticeQuestion(userId: string) {
     }
   }
   if (!activeCourseId) throw Object.assign(new Error("Create a course before starting adaptive practice."), { status: 409, code: "COURSE_REQUIRED" });
-  const course = await Course.findOne({ id: activeCourseId, userId });
+  const course = fallbackCourse || await Course.findOne({ id: activeCourseId, userId });
   if (!course) throw Object.assign(new Error("Current course not found."), { status: 404, code: "COURSE_NOT_FOUND" });
   if (!course.topics.length) throw Object.assign(new Error("Current course has no topics to practice."), { status: 409, code: "COURSE_TOPICS_REQUIRED" });
-  const completedAssessment = await AssessmentAttempt.findOne({ userId, courseId: course.id, result: { $exists: true } });
+  const [completedAssessment, recentAttempts] = await Promise.all([
+    AssessmentAttempt.findOne({ userId, courseId: course.id, result: { $exists: true } }),
+    PracticeAttempt.find({ userId, courseId: course.id }).sort({ createdAt: -1 }).limit(8),
+  ]);
   if (!completedAssessment) throw Object.assign(new Error("Complete this course's level assessment before starting a targeted challenge."), { status: 409, code: "COURSE_ASSESSMENT_REQUIRED" });
-
-  const recentAttempts = await PracticeAttempt.find({ userId, courseId: course.id }).sort({ createdAt: -1 }).limit(8);
   const recentAccuracy = recentAttempts.length
     ? Math.round((recentAttempts.filter((attempt) => attempt.correct).length / recentAttempts.length) * 100)
     : null;
@@ -72,20 +78,30 @@ export async function getNextPracticeQuestion(userId: string) {
     : recentTopicAccuracy >= 80 && topicMastery >= 70
       ? "hard"
       : "medium";
-  const recentQuestionIds = recentAttempts.map((attempt) => attempt.questionId);
   const missedQuestionIds = recentAttempts.filter((attempt) => !attempt.correct).map((attempt) => attempt.questionId);
-  const missedQuestions = missedQuestionIds.length
-    ? await Question.find({ id: { $in: missedQuestionIds } }).select("conceptTested question").limit(4)
-    : [];
-  const missedConcepts = missedQuestions.map((question) => question.conceptTested || question.question).filter(Boolean);
-
+  const [attemptedQuestionIds, deliveredQuestionIds, missedQuestions] = await Promise.all([
+    PracticeAttempt.distinct("questionId", { userId, courseId: course.id }),
+    PracticeQuestionDelivery.distinct("questionId", { userId, courseId: course.id }),
+    missedQuestionIds.length
+      ? Question.find({ id: { $in: missedQuestionIds } }).select("conceptTested question").limit(4)
+      : Promise.resolve([]),
+  ]);
+  const usedQuestionIds = [...new Set([...attemptedQuestionIds, ...deliveredQuestionIds])];
   // Prefer a question not recently answered, at the difficulty supported by the learner's recent results.
-  const availableQuestions = await Question.find({
-    courseId: course.id,
-    topicId: activeTopicId,
-    type: "practice",
-    id: { $nin: recentQuestionIds },
-  }).sort({ createdAt: -1 });
+  const [candidateQuestions, deliveredQuestionDocs] = await Promise.all([
+    Question.find({
+      courseId: course.id,
+      topicId: activeTopicId,
+      type: "practice",
+      id: { $nin: usedQuestionIds },
+    }).sort({ createdAt: -1 }),
+    usedQuestionIds.length
+      ? Question.find({ id: { $in: usedQuestionIds }, courseId: course.id }).select("question").lean()
+      : Promise.resolve([]),
+  ]);
+  const deliveredQuestionTexts = deliveredQuestionDocs.map((item) => normalizeQuestionText(item.question || ""));
+  const availableQuestions = candidateQuestions.filter((item) => !deliveredQuestionTexts.includes(normalizeQuestionText(item.question)));
+  const missedConcepts = missedQuestions.map((question) => question.conceptTested || question.question).filter(Boolean);
   const difficultyRank: Record<string, number> = { easy: 0, medium: 1, hard: 2 };
   let qDoc = availableQuestions.sort((left, right) =>
     Math.abs((difficultyRank[left.difficulty] ?? 1) - difficultyRank[targetDifficulty]) -
@@ -111,17 +127,27 @@ Format strictly as JSON:
   "conceptTested": "Key concept"
 }`;
 
-      const userPrompt = `Course: "${course.title}". Learning request: "${course.learningRequest}". Topic: "${currentTopic.name}". Description: "${currentTopic.description || ""}". Objectives: ${(currentTopic.learningObjectives || []).join("; ")}. Learner topic mastery: ${topicMastery}%. Recent topic accuracy: ${recentTopicAccuracy}%. Difficulty target: ${targetDifficulty}. Concepts from previous mistakes to reinforce: ${missedConcepts.join("; ") || "No prior mistakes recorded"}.`;
+      const previousQuestionTexts = deliveredQuestionDocs.map((item) => item.question).filter(Boolean);
+      const recentQuestionTexts = previousQuestionTexts.slice(-10);
+      const userPrompt = `Course: "${course.title}". Learning request: "${course.learningRequest}". Topic: "${currentTopic.name}". Description: "${currentTopic.description || ""}". Objectives: ${(currentTopic.learningObjectives || []).join("; ")}. Learner topic mastery: ${topicMastery}%. Recent topic accuracy: ${recentTopicAccuracy}%. Difficulty target: ${targetDifficulty}. Concepts from previous mistakes to reinforce: ${missedConcepts.join("; ") || "No prior mistakes recorded"}. Do not repeat these recently delivered question prompts; test a different concept or application: ${recentQuestionTexts.join(" | ") || "None"}.`;
 
-      const aiQuestion = await generateStructuredAIResponse(
+      let aiQuestion = await generateStructuredAIResponse(
         systemPrompt,
         userPrompt,
         (raw) => AIDiagnosticQuestionSchema.parse(raw),
         AIDiagnosticQuestionJsonSchema
       );
+      if (previousQuestionTexts.some((previous) => normalizeQuestionText(previous) === normalizeQuestionText(aiQuestion.question))) {
+        aiQuestion = await generateStructuredAIResponse(
+          systemPrompt,
+          `${userPrompt}\nThe last draft repeated a previous question. Write a distinctly different question and do not reuse this wording: "${aiQuestion.question}".`,
+          (raw) => AIDiagnosticQuestionSchema.parse(raw),
+          AIDiagnosticQuestionJsonSchema
+        );
+      }
 
       qDoc = new Question({
-        id: `practice_${activeTopicId}_${Date.now()}`,
+        id: `practice_${activeTopicId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         courseId: course.id,
         subjectId: course.subject.id,
         topicId: activeTopicId,
@@ -136,6 +162,12 @@ Format strictly as JSON:
       });
       await qDoc.save();
   }
+
+  await PracticeQuestionDelivery.updateOne(
+    { userId, courseId: course.id, questionId: qDoc.id },
+    { $setOnInsert: { topicId: activeTopicId } },
+    { upsert: true }
+  );
 
   const strategy = topicMastery < 50 ? "foundation_first" : "example_first";
   const selectionReason = lastAttempt && !lastAttempt.correct
@@ -187,13 +219,33 @@ export async function submitPracticeAnswer(params: {
   const explanation = qDoc.explanation;
   const isCorrect = correctOptionId === selectedOptionId;
   const topicId = qDoc.topicId;
-  const learner = await Learner.findOne({ id: userId });
+  const [learner, course] = await Promise.all([
+    Learner.findOne({ id: userId }),
+    qDoc.courseId ? Course.findOne({ id: qDoc.courseId, userId }) : Promise.resolve(null),
+  ]);
   if (!learner) throw Object.assign(new Error("Learner not found."), { status: 404, code: "LEARNER_NOT_FOUND" });
-  const course = qDoc.courseId ? await Course.findOne({ id: qDoc.courseId, userId }) : null;
   if (!course) throw Object.assign(new Error("Question does not belong to one of your courses."), { status: 403, code: "QUESTION_NOT_OWNED" });
   const courseTopic = course.topics.find((topic) => topic.id === topicId);
   if (!courseTopic || !TOPIC_LEARNING_STATES.includes(courseTopic.learningState || "")) {
     throw Object.assign(new Error("Complete this topic's diagnostic assessment before starting its practice."), { status: 409, code: "TOPIC_ASSESSMENT_REQUIRED" });
+  }
+  if (!qDoc.options.some((option) => option.id === selectedOptionId)) {
+    throw Object.assign(new Error("Choose one of the available answer options."), { status: 400, code: "INVALID_PRACTICE_OPTION" });
+  }
+
+  const priorSubmission = await PracticeSubmission.findOne({ userId, questionId });
+  if (priorSubmission) {
+    if (priorSubmission.state === "COMPLETED" && priorSubmission.result) return priorSubmission.result;
+    throw Object.assign(new Error("This answer is already being recorded."), { status: 409, code: "PRACTICE_ANSWER_IN_PROGRESS" });
+  }
+  let submission;
+  try {
+    [submission] = await PracticeSubmission.create([{ userId, questionId, state: "PROCESSING" }]);
+  } catch (error) {
+    if ((error as { code?: number })?.code !== 11000) throw error;
+    const existing = await PracticeSubmission.findOne({ userId, questionId });
+    if (existing?.state === "COMPLETED" && existing.result) return existing.result;
+    throw Object.assign(new Error("This answer is already being recorded."), { status: 409, code: "PRACTICE_ANSWER_IN_PROGRESS" });
   }
   const recentTopicAttempts = await PracticeAttempt.find({ userId, topicId, courseId: course.id }).sort({ createdAt: -1 }).limit(4);
 
@@ -353,7 +405,7 @@ export async function submitPracticeAnswer(params: {
   });
   await attemptDoc.save();
 
-  return {
+  const result = {
     attempt: {
       questionId,
       selectedOptionId,
@@ -377,4 +429,8 @@ export async function submitPracticeAnswer(params: {
       reason: adaptReason,
     },
   };
+  submission.state = "COMPLETED";
+  submission.result = result;
+  await submission.save();
+  return result;
 }

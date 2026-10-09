@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, BrainCircuit } from "lucide-react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import AppShell from "../components/layout/AppShell";
@@ -16,6 +16,9 @@ export default function Assessment() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [retryable, setRetryable] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const submitInFlight = useRef(false);
   const [searchParams] = useSearchParams();
   const selectedTopicId = searchParams.get("topicId");
   const navigate = useNavigate();
@@ -23,14 +26,19 @@ export default function Assessment() {
   useEffect(() => {
     let active = true;
     (async () => {
+      setLoading(true);
+      setError("");
+      setRetryable(false);
       try {
         const dashboard = await api.dashboard();
         const courseId = dashboard.activeCourseId || localStorage.getItem("adapt_active_course_id");
         if (!courseId) { if (active) setError("Create a course before taking its level assessment."); return; }
-        const [savedCourse, session] = await Promise.all([api.course(courseId), api.assessment(courseId, selectedTopicId)]);
+        const savedCourse = await api.course(courseId);
         if (!active) return;
         setCourse(savedCourse);
         localStorage.setItem("adapt_active_course_id", savedCourse.id);
+        const session = await api.assessment(courseId, selectedTopicId);
+        if (!active) return;
         if (session.status === "COMPLETED") { setResult(session.result); setAssessmentId(session.assessmentId); return; }
         setAssessmentId(session.assessmentId);
         const questions = session.questions || [];
@@ -52,15 +60,28 @@ export default function Assessment() {
         setStep(nextStep);
         const savedAnswer = resumedAnswers.find((answer) => answer.questionId === questions[nextStep]?.id);
         setSelected(savedAnswer?.selectedAnswer || null);
-      } catch (err) { if (active) setError(err.message); }
+      } catch (err) {
+        if (active) {
+          setError(err.message || "ADAPT could not load this assessment. Please retry.");
+          setRetryable(Boolean(err.retryable));
+        }
+      }
       finally { if (active) setLoading(false); }
     })();
     return () => { active = false; };
-  }, [selectedTopicId]);
+  }, [selectedTopicId, loadAttempt]);
+
+  const retryLoad = () => {
+    setError("");
+    setRetryable(false);
+    setLoading(true);
+    setLoadAttempt((attempt) => attempt + 1);
+  };
 
   const question = assessmentQuestions[step];
   const submit = async () => {
-    if (!selected || !question || !assessmentId || !course) return;
+    if (!selected || !question || !assessmentId || !course || saving || submitInFlight.current) return;
+    submitInFlight.current = true;
     const topic = course.topics.find((item) => item.id === question.topicId);
     const answer = { questionId: question.id, questionNumber: step + 1, topicId: question.topicId, topic: topic?.name || question.topicId, difficulty: question.difficulty, selectedAnswer: selected, ...(question.correctOptionId ? { correct: selected === question.correctOptionId } : {}) };
     const nextAnswers = [...answers.filter((item) => item.questionId !== question.id), answer];
@@ -74,13 +95,14 @@ export default function Assessment() {
       } else {
         setStep((value) => value + 1);
         setSelected(null);
+        submitInFlight.current = false;
       }
-    } catch (err) { setError(err.message); }
+    } catch (err) { submitInFlight.current = false; setError(err.message); }
     finally { setSaving(false); }
   };
 
   if (loading) return <AppShell breadcrumb="ASSESSMENT"><div className="page"><div className="card card-pad">Loading the saved course assessment…</div></div></AppShell>;
-  if (!course) return <AppShell breadcrumb="ASSESSMENT"><div className="page"><div className="card card-pad"><h1 className="page-title">{error || "A course is needed before assessment."}</h1><Link className="btn btn-primary" style={{ marginTop: 15 }} to="/course">Open Course <ArrowRight size={14} /></Link></div></div></AppShell>;
+  if (!course) return <AppShell breadcrumb="ASSESSMENT"><div className="page"><div className="card card-pad"><h1 className="page-title">{error || "A course is needed before assessment."}</h1>{retryable && <button className="btn btn-primary" style={{ marginTop: 15 }} onClick={retryLoad}>Retry assessment generation</button>}<Link className="btn" style={{ marginTop: 15 }} to="/course">Open Course <ArrowRight size={14} /></Link></div></div></AppShell>;
 
   if (result) return <AppShell breadcrumb="ASSESSMENT"><div className="page"><div className="card card-pad glow" style={{ maxWidth: 850, margin: "30px auto" }}>
     <div style={{ textAlign: "center" }}><BrainCircuit size={34} color="var(--lavender)" /><div className="eyebrow" style={{ marginTop: 15 }}>ASSESSMENT COMPLETE · {result.accuracy}%</div><h1 className="page-title" style={{ marginTop: 8 }}>Your starting point is ready.</h1><p className="page-subtitle">{result.subject.name} · {result.level} level</p></div>
@@ -90,7 +112,7 @@ export default function Assessment() {
     <div style={{ textAlign: "center", marginTop: 22 }}><button className="btn btn-primary" onClick={async () => { if (!selectedTopicId) { navigate("/course"); return; } try { await api.activateTopic(course.id, selectedTopicId); navigate("/practice"); } catch (err) { setError(err.message); } }}>Start Learning <ArrowRight size={14} /></button>{error && <div className="form-error" role="alert">{error}</div>}</div>
   </div></div></AppShell>;
 
-  if (error && !assessmentQuestions.length) return <AppShell breadcrumb="ASSESSMENT"><div className="page"><div className="form-error" role="alert">{error}</div><Link className="btn" style={{ marginTop: 12 }} to="/course">Back to Course</Link></div></AppShell>;
+  if (error && !assessmentQuestions.length) return <AppShell breadcrumb="ASSESSMENT"><div className="page"><div className="form-error" role="alert">{error}</div>{retryable && <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={retryLoad}>Retry assessment generation</button>}<Link className="btn" style={{ marginTop: 12 }} to="/course">Back to Course</Link></div></AppShell>;
   if (!question) return <AppShell breadcrumb="ASSESSMENT"><div className="page"><div className="card card-pad">No assessment questions are available yet.</div></div></AppShell>;
 
   return <AppShell breadcrumb="ASSESSMENT"><div className="page">

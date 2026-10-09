@@ -1,30 +1,53 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Send, Sparkles, BookOpenCheck, Lightbulb, Image, TimerReset, Plus } from "lucide-react";
 import { Link } from "react-router-dom";
 import AppShell from "../components/layout/AppShell";
 import { api } from "../services/api";
+import { apiClient } from "../services/api/apiClient";
+import { readRuntimeValue, writeRuntimeValue } from "../services/runtimeCache";
 
 const actions = [["Explain simply", Lightbulb], ["Give a real-world example", BookOpenCheck], ["Make a visual explanation", Image], ["Help me prepare an exam answer", BookOpenCheck], ["Quiz me", Sparkles], ["Give me a short revision", TimerReset]];
 
 export default function Tutor() {
   const [context, setContext] = useState(null);
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState(() => readRuntimeValue(`learner:${apiClient.getUserId()}:tutor`) || []);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [failedRequest, setFailedRequest] = useState(null);
+  const requestInFlight = useRef(false);
   useEffect(() => { api.dashboard().then(setContext).catch((err) => setError(err.message)); }, []);
+  useEffect(() => { const learnerId = apiClient.getUserId(); if (learnerId) writeRuntimeValue(`learner:${learnerId}:tutor`, messages.slice(-20)); }, [messages]);
 
   const course = context?.course;
   const topic = course?.topics?.find((item) => item.id === (course.activeTopicId || course.recommendedTopicId));
-  const send = async () => {
+  const sendMessage = async (message, history) => {
+    if (!message || requestInFlight.current) return;
+    requestInFlight.current = true;
+    setError("");
+    setFailedRequest(null);
+    setBusy(true);
+    try {
+      const response = await api.tutorMessage({ message, mode: "explain", topicId: topic?.id, topicName: topic?.name, courseName: course?.title, history });
+      setMessages((current) => [...current, { role: "user", content: message }, response]);
+      setInput((current) => current.trim() === message ? "" : current);
+    } catch (err) {
+      setFailedRequest({ message, history, retryable: Boolean(err.retryable) });
+      setError(err.message || "ADAPT could not answer. Please retry.");
+    } finally {
+      requestInFlight.current = false;
+      setBusy(false);
+    }
+  };
+  const send = () => {
     const message = input.trim();
     if (!message || busy) return;
-    setError(""); setInput(""); setMessages((current) => [...current, { role: "user", content: message }]); setBusy(true);
-    try {
-      const response = await api.tutorMessage({ message, mode: "explain", topicId: topic?.id, topicName: topic?.name, courseName: course?.title });
-      setMessages((current) => [...current, response]);
-    } catch (err) { setError(err.message); }
-    finally { setBusy(false); }
+    const history = messages.slice(-8).map(({ role, content }) => ({ role, content: content.slice(0, 1200) }));
+    void sendMessage(message, history);
+  };
+  const retryFailedRequest = () => {
+    if (!failedRequest?.retryable || busy) return;
+    void sendMessage(failedRequest.message, failedRequest.history);
   };
   const buildCourse = () => {
     const request = input.trim() || [...messages].reverse().find((message) => message.role === "user")?.content;
@@ -34,7 +57,7 @@ export default function Tutor() {
   return <AppShell breadcrumb="TUTOR"><div className="page">
     <div className="eyebrow">AI TEACHING WORKSPACE</div><h1 className="page-title" style={{ marginTop: 8 }}>ADAPT Tutor</h1><p className="page-subtitle">Ask a question with or without a course. ADAPT can help independently.</p>
     <div className="chips" style={{ marginTop: 15 }}><span className="chip">{course?.title || "INDEPENDENT TUTOR"}</span>{topic && <span className="chip">{topic.name.toUpperCase()}</span>}{context?.assessment?.level && <span className="chip">{context.assessment.level.toUpperCase()} LEVEL</span>}</div>
-    {error && <div className="form-error" role="alert" style={{ marginTop: 15 }}>{error}</div>}
+    {error && <div className="form-error" role="alert" style={{ marginTop: 15 }}>{error}{failedRequest?.retryable && <button type="button" className="btn" style={{ marginLeft: 10 }} onClick={retryFailedRequest} disabled={busy}>Retry last message</button>}</div>}
     <div className="tutor-layout" style={{ marginTop: 18 }}>
       <section className="card card-pad">
         <div className="quick-actions">{actions.map(([label, Icon]) => <button className="btn" key={label} onClick={() => setInput(`${label}: ${topic?.name || ""}`.trim())}><Icon size={13} />{label}</button>)}</div>

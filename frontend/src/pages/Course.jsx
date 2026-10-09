@@ -25,6 +25,7 @@ export default function Course() {
   const [error, setError] = useState("");
   const [busyTopic, setBusyTopic] = useState(false);
   const [deletingCourse, setDeletingCourse] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const navigate = useNavigate();
 
   const load = async () => {
@@ -69,13 +70,14 @@ export default function Course() {
   };
 
   const deleteCurrentCourse = async () => {
-    if (!course || deletingCourse || !window.confirm(`Delete “${course.title}”? This removes the saved course from your account.`)) return;
+    if (!course || deletingCourse) return;
     setDeletingCourse(true);
     setError("");
     try {
       await api.deleteCourse(course.id);
       removeCourseFromLocal(course.id);
       await load();
+      setShowDeleteDialog(false);
     } catch (err) { setError(err.message || "Could not delete this course."); }
     finally { setDeletingCourse(false); }
   };
@@ -92,7 +94,7 @@ export default function Course() {
         {error && <div className="form-error" role="alert">{error}</div>}
         <div className="flex-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "end", gap: 15 }}>
           <div><div className="eyebrow">YOUR COURSE{courses.length > 1 ? ` · ${courses.length} SAVED` : ""}</div><h1 className="page-title" style={{ marginTop: 8 }}>{course.title}</h1><p className="page-subtitle">Generated from: “{course.learningRequest}”</p></div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}><button type="button" className="btn" onClick={deleteCurrentCourse} disabled={deletingCourse}>{deletingCourse ? "Deleting…" : "Delete Course"}</button><Link className="btn" to="/onboarding?intent=learn"><Plus size={14} /> Create New Course</Link></div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}><button type="button" className="btn" onClick={() => setShowDeleteDialog(true)} disabled={deletingCourse}>Delete Course</button><Link className="btn" to="/onboarding?intent=learn"><Plus size={14} /> Create New Course</Link></div>
         </div>
 
         {courses.length > 1 && <div className="grid grid-3" style={{ marginTop: 16 }}>{courses.map((item) => <button key={item.id} className={`card card-pad ${item.id === course.id ? "glow" : ""}`} style={{ textAlign: "left", color: "inherit" }} onClick={() => openCourse(item.id)}><div className="tiny">{item.id === course.id ? "CURRENT COURSE" : "OPEN COURSE"}</div><strong style={{ display: "block", marginTop: 6 }}>{item.title}</strong><span className="mini" style={{ display: "block", marginTop: 5 }}>{item.assessmentStatus === "COMPLETED" ? "Assessment complete" : item.assessmentStatus === "IN_PROGRESS" ? "Assessment in progress" : "Assessment not started"}</span></button>)}</div>}
@@ -132,5 +134,19 @@ export default function Course() {
       </>;
     })();
 
-  return <AppShell breadcrumb="COURSE"><div className="page">{content}</div></AppShell>;
+  return <AppShell breadcrumb="COURSE">
+    <div className="page">{content}</div>
+    {showDeleteDialog && course && <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !deletingCourse) setShowDeleteDialog(false); }}>
+      <section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-course-title" aria-describedby="delete-course-description" onKeyDown={(event) => { if (event.key === "Escape" && !deletingCourse) setShowDeleteDialog(false); }}>
+        <div className="eyebrow">DELETE COURSE</div>
+        <h2 id="delete-course-title" className="confirm-dialog-title">Delete “{course.title}”?</h2>
+        <p id="delete-course-description" className="confirm-dialog-copy">This will remove the course and its saved learning progress from your account.</p>
+        {error && <div className="form-error" role="alert">{error}</div>}
+        <div className="confirm-dialog-actions">
+          <button type="button" className="btn" onClick={() => setShowDeleteDialog(false)} disabled={deletingCourse}>Cancel</button>
+          <button type="button" className="btn btn-danger" onClick={deleteCurrentCourse} disabled={deletingCourse}>{deletingCourse ? "Deleting…" : "Delete Course"}</button>
+        </div>
+      </section>
+    </div>}
+  </AppShell>;
 }

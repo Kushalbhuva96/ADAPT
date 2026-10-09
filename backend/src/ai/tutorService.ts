@@ -11,6 +11,7 @@ export async function generateTutorExplanation(params: {
   topicId?: string;
   topicName?: string;
   courseName?: string;
+  history?: Array<{ role: "user" | "assistant"; content: string }>;
   userId?: string;
 }) {
   const {
@@ -19,14 +20,17 @@ export async function generateTutorExplanation(params: {
     topicId = "",
     topicName,
     courseName,
+    history = [],
     userId,
   } = params;
 
   if (!userId) throw Object.assign(new Error("A learner account is required."), { status: 401, code: "LEARNER_REQUIRED" });
   const learner = await Learner.findOne({ id: userId });
   if (!learner) throw Object.assign(new Error("Learner not found."), { status: 404, code: "LEARNER_NOT_FOUND" });
-  const course = learner.activeCourseId ? await Course.findOne({ id: learner.activeCourseId, userId }) : null;
-  const assessment = course ? await AssessmentAttempt.findOne({ userId, courseId: course.id, result: { $exists: true } }).sort({ createdAt: -1 }) : null;
+  const [course, assessment] = learner.activeCourseId ? await Promise.all([
+    Course.findOne({ id: learner.activeCourseId, userId }).lean(),
+    AssessmentAttempt.findOne({ userId, courseId: learner.activeCourseId, result: { $exists: true } }).sort({ createdAt: -1 }).lean(),
+  ]) : [null, null];
   const activeTopic = course?.topics.find((topic) => topic.id === learner.activeTopicId);
   const teachingTopic = topicName || activeTopic?.name || "the concept in the learner's question";
   const teachingCourse = courseName || course?.title || "independent tutoring";
@@ -48,7 +52,8 @@ Format your response as a JSON object:
   "content": "Your thorough, engaging explanation here."
 }`;
 
-  const userPrompt = `Student asks: "${message}"`;
+  const recentConversation = history.slice(-8).map((entry) => `${entry.role === "user" ? "Learner" : "ADAPT"}: ${entry.content}`).join("\n");
+  const userPrompt = `${recentConversation ? `Recent conversation (for continuity):\n${recentConversation}\n\n` : ""}Learner's current question: "${message}"`;
 
   const aiResponse = await generateStructuredAIResponse(
     systemPrompt,

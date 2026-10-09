@@ -100,8 +100,9 @@ REQUIREMENTS:
     topicAttempts: {},
   });
 
+  const saveStartedAt = performance.now();
   await courseDoc.save();
-  console.log(`[CourseGenerator] Course created and saved to MongoDB: ${courseId}`);
+  console.info(`[Performance] Course persistence completed in ${Math.round(performance.now() - saveStartedAt)}ms.`);
 
   return {
     course: {
