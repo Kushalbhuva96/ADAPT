@@ -1,4 +1,9 @@
-let currentMode = "hosted";
+function readSavedMode() {
+  try { return localStorage.getItem("adapt_tutor_mode") === "local" ? "local" : "hosted"; }
+  catch { return "hosted"; }
+}
+
+let currentMode = readSavedMode();
 let localTutorEngine = null;
 const listeners = new Set();
 
@@ -8,6 +13,8 @@ export function getTutorMode() {
 
 export function setTutorMode(mode) {
   currentMode = mode === "local" ? "local" : "hosted";
+  try { localStorage.setItem("adapt_tutor_mode", currentMode); }
+  catch {}
   for (const listener of listeners) listener(currentMode);
 }
 

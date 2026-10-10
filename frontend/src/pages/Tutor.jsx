@@ -6,8 +6,8 @@ import { api } from "../services/api";
 import { apiClient } from "../services/api/apiClient";
 import { getDownloadedCourses } from "../services/offlineCourseStore";
 import { readRuntimeValue, writeRuntimeValue } from "../services/runtimeCache";
-import { generateLocalTutorReply, inspectWebGpu, isLocalTutorModelCached, loadLocalTutor, LOCAL_TUTOR_MODEL, removeLocalTutorModel } from "../services/localTutor";
-import { setLocalTutorEngine, setTutorMode } from "../services/tutorMode";
+import { generateLocalTutorReply, getLocalTutorRuntime, inspectWebGpu, isLocalTutorModelCached, loadLocalTutor, LOCAL_TUTOR_MODEL, removeLocalTutorModel } from "../services/localTutor";
+import { getLocalTutorEngine, getTutorMode, setLocalTutorEngine, setTutorMode } from "../services/tutorMode";
 
 const actions = [["Explain simply", Lightbulb], ["Give a real-world example", BookOpenCheck], ["Make a visual explanation", Image], ["Help me prepare an exam answer", BookOpenCheck], ["Quiz me", Sparkles], ["Give me a short revision", TimerReset]];
 
@@ -19,10 +19,11 @@ export default function Tutor() {
   const [error, setError] = useState("");
   const [failedRequest, setFailedRequest] = useState(null);
   const requestInFlight = useRef(false);
-  const [localRuntime, setLocalRuntime] = useState(null);
-  const [localMode, setLocalMode] = useState(false);
+  const [localRuntime, setLocalRuntime] = useState(() => getLocalTutorRuntime());
+  const [localMode, setLocalMode] = useState(() => getTutorMode() === "local" && Boolean(getLocalTutorEngine()));
   const [modelCached, setModelCached] = useState(false);
   const [modelCacheChecked, setModelCacheChecked] = useState(false);
+  const [modelState, setModelState] = useState("LOADING");
   const [localCapability, setLocalCapability] = useState({ supported: null, reason: "Checking this device…" });
   const [modelBusy, setModelBusy] = useState(false);
   const [modelProgress, setModelProgress] = useState("");
@@ -41,6 +42,48 @@ export default function Tutor() {
       if (selected) setContext({ course: selected.course });
       else setError(err.message);
     });
+    return () => { active = false; };
+  }, []);
+  useEffect(() => {
+    let active = true;
+    const restoreModel = async () => {
+      try {
+        const cached = await isLocalTutorModelCached();
+        if (!active) return;
+        setModelCached(cached);
+        setModelCacheChecked(true);
+        setModelState(cached ? "DOWNLOADED" : "NOT_DOWNLOADED");
+        if (!cached) {
+          if (getTutorMode() === "local" && !getLocalTutorEngine()) setTutorMode("hosted");
+          return;
+        }
+        if (getTutorMode() !== "local") return;
+
+        setModelState("LOADING");
+        setModelBusy(true);
+        setModelProgress("Restoring Local AI from this device’s saved model…");
+        const runtime = await loadLocalTutor({
+          modelCached: true,
+          onProgress: (report) => {
+            if (active) setModelProgress(`${report?.text || "Loading the local model…"}${Number.isFinite(report?.progress) ? ` (${Math.round(report.progress * 100)}%)` : ""}`);
+          },
+        });
+        if (!active) return;
+        setLocalRuntime(runtime);
+        setLocalTutorEngine(runtime.engine);
+        setLocalMode(true);
+        setModelState("READY");
+        setModelProgress("");
+      } catch (err) {
+        if (!active) return;
+        setModelState("ERROR");
+        setModelError(err.message || "The saved model could not be loaded.");
+        setModelProgress("");
+      } finally {
+        if (active) setModelBusy(false);
+      }
+    };
+    void restoreModel();
     return () => { active = false; };
   }, []);
   useEffect(() => { const learnerId = apiClient.getUserId(); if (learnerId) writeRuntimeValue(`learner:${learnerId}:tutor`, messages.slice(-20)); }, [messages]);
@@ -85,15 +128,18 @@ export default function Tutor() {
       return;
     }
     setModelBusy(true);
+    setModelState("LOADING");
     setModelProgress("Checking for a previously downloaded model…");
     try {
       const cached = await isLocalTutorModelCached();
       setModelCached(cached);
       setModelCacheChecked(true);
+      setModelState(cached ? "DOWNLOADED" : "NOT_DOWNLOADED");
       setModelProgress("");
       if (cached) await startLocalTutor(true);
       else setConsentOpen(true);
     } catch (err) {
+      setModelState("ERROR");
       setModelError(err.message || "The saved model could not be checked.");
       setModelProgress("");
     } finally {
@@ -103,9 +149,19 @@ export default function Tutor() {
   const startLocalTutor = async (cachedModel = modelCached) => {
     setConsentOpen(false);
     setModelBusy(true);
+    setModelState(cachedModel ? "LOADING" : "DOWNLOADING");
     setModelError("");
     setModelProgress(modelCached ? "Loading the saved model on this device…" : "Preparing the on-device model…");
     try {
+      const existingEngine = getLocalTutorEngine();
+      if (existingEngine) {
+        setLocalRuntime(getLocalTutorRuntime() || { engine: existingEngine });
+        setLocalMode(true);
+        setTutorMode("local");
+        setModelState("READY");
+        setModelProgress("");
+        return;
+      }
       const runtime = await loadLocalTutor({
         modelCached: cachedModel,
         onProgress: (report) => setModelProgress(`${report?.text || "Loading the local model…"}${Number.isFinite(report?.progress) ? ` (${Math.round(report.progress * 100)}%)` : ""}`),
@@ -118,13 +174,16 @@ export default function Tutor() {
       setModelCacheChecked(true);
       setLocalMode(true);
       setTutorMode("local");
+      setModelState("READY");
       setModelProgress("");
     } catch (err) {
       cancelModelLoad.current = null;
       if (err.message === "Local model download cancelled.") {
+        setModelState(cachedModel ? "DOWNLOADED" : "NOT_DOWNLOADED");
         setModelProgress("");
         setModelError("Model download cancelled. No local reply was generated.");
       } else {
+        setModelState("ERROR");
         setModelError(String(err?.message || err || "The local model could not be loaded on this device."));
         setModelProgress("");
       }
@@ -144,8 +203,10 @@ export default function Tutor() {
       setTutorMode("hosted");
       setModelCached(false);
       setModelCacheChecked(true);
+      setModelState("NOT_DOWNLOADED");
       setModelProgress("");
     } catch (err) {
+      setModelState("ERROR");
       setModelError(err.message || "The saved model could not be removed.");
     } finally {
       setModelBusy(false);
@@ -172,7 +233,7 @@ export default function Tutor() {
     {error && <div className="form-error" role="alert" style={{ marginTop: 15 }}>{error}{failedRequest?.retryable && <button type="button" className="btn" style={{ marginLeft: 10 }} onClick={retryFailedRequest} disabled={busy}>Retry last message</button>}</div>}
     <div className="tutor-layout" style={{ marginTop: 18 }}>
       <section className="card card-pad">
-        <div className="teaching-block" style={{ marginBottom: 18, padding: 14 }}>
+        <div className="teaching-block" data-model-state={modelState} style={{ marginBottom: 18, padding: 14 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
             <div>
               <div className="eyebrow">TUTOR MODE</div>

@@ -46,7 +46,10 @@ export async function inspectModelStorage(storage = globalThis.navigator?.storag
   };
 }
 
-export async function loadLocalTutor({ onProgress = () => {}, onCancelReady = () => {}, modelCached = false } = {}) {
+let localTutorRuntime = null;
+let localTutorLoadPromise = null;
+
+async function createLocalTutorRuntime({ onProgress = () => {}, onCancelReady = () => {}, modelCached = false } = {}) {
   const gpu = await inspectWebGpu();
   if (!gpu.supported) throw new Error(gpu.reason);
   if (!modelCached) {
@@ -78,7 +81,7 @@ export async function loadLocalTutor({ onProgress = () => {}, onCancelReady = ()
     ]);
   } catch (error) {
     worker.terminate();
-    if (error?.message === "Local model download cancelled.") {
+    if (error?.message === "Local model download cancelled." && !modelCached) {
       try { await webllm.deleteModelAllInfoInCache(LOCAL_TUTOR_MODEL.id, appConfig); } catch { /* partial cache may already be absent */ }
     }
     throw error;
@@ -94,6 +97,23 @@ export async function loadLocalTutor({ onProgress = () => {}, onCancelReady = ()
   return { engine, worker, cancel };
 }
 
+export function getLocalTutorRuntime() {
+  return localTutorRuntime;
+}
+
+export async function loadLocalTutor(options = {}) {
+  if (localTutorRuntime) return localTutorRuntime;
+  if (localTutorLoadPromise) return localTutorLoadPromise;
+
+  localTutorLoadPromise = createLocalTutorRuntime(options);
+  try {
+    localTutorRuntime = await localTutorLoadPromise;
+    return localTutorRuntime;
+  } finally {
+    localTutorLoadPromise = null;
+  }
+}
+
 export async function isLocalTutorModelCached() {
   const webllm = await import("@mlc-ai/web-llm");
   return webllm.hasModelInCache(LOCAL_TUTOR_MODEL.id, {
@@ -103,13 +123,16 @@ export async function isLocalTutorModelCached() {
 }
 
 export async function removeLocalTutorModel(runtime) {
-  if (runtime?.engine) await runtime.engine.unload();
-  runtime?.worker?.terminate();
+  const activeRuntime = runtime || localTutorRuntime;
+  if (activeRuntime?.engine) await activeRuntime.engine.unload();
+  activeRuntime?.worker?.terminate();
   const webllm = await import("@mlc-ai/web-llm");
-  return webllm.deleteModelAllInfoInCache(LOCAL_TUTOR_MODEL.id, {
+  const result = await webllm.deleteModelAllInfoInCache(LOCAL_TUTOR_MODEL.id, {
     ...webllm.prebuiltAppConfig,
     cacheBackend: "cache",
   });
+  if (!runtime || runtime === localTutorRuntime) localTutorRuntime = null;
+  return result;
 }
 
 export async function generateLocalTutorReply(engine, { message, history = [], course, topic }) {

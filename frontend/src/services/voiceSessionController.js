@@ -22,6 +22,7 @@ export function createVoiceSessionController({
   documentObject = globalThis.document,
   windowObject = globalThis.window,
   recognitionLanguage = globalThis.navigator?.language || "en-US",
+  iosPwa = false,
   maxRestarts = 3,
   restartDelayMs = 350,
   responseTimeoutMs = 60_000,
@@ -272,7 +273,41 @@ export function createVoiceSessionController({
       recoveryUsingNativeMicrophone = true;
       onInterruptionAvailability(false);
       debug("manual-interruption-restarting-browser-microphone", { reason: "discard playback monitor and start a fresh learner recognizer" });
-      listen(token);
+      if (iosPwa && mediaDevices?.getUserMedia) {
+        emitState("CONNECTING");
+        let restartScheduled = false;
+        const scheduleRecognition = () => {
+          if (restartScheduled || !isCurrent(token)) return;
+          restartScheduled = true;
+          clearRestart();
+          restartTimer = setTimeout(() => {
+            if (isCurrent(token) && interruptionPending) listen(token);
+          }, 350);
+        };
+        // iOS WebKit can leave SpeechRecognition hung after TTS. Re-prime its mic
+        // route, release that temporary stream, then start a fresh recognizer.
+        let micPrimeTimeout = setTimeout(scheduleRecognition, 2500);
+        try {
+          void mediaDevices.getUserMedia({ audio: {
+            echoCancellation: { ideal: true },
+            noiseSuppression: { ideal: true },
+            autoGainControl: { ideal: true },
+          } }).then((stream) => {
+            for (const track of stream.getTracks?.() || []) track.stop();
+            clearTimeout(micPrimeTimeout);
+            debug("ios-interruption-microphone-reprimed");
+            scheduleRecognition();
+          }).catch((error) => {
+            clearTimeout(micPrimeTimeout);
+            debug("ios-interruption-microphone-reprime-failed", { name: error?.name || "unknown" });
+            scheduleRecognition();
+          });
+        } catch (error) {
+          clearTimeout(micPrimeTimeout);
+          debug("ios-interruption-microphone-reprime-failed", { name: error?.name || "unknown" });
+          scheduleRecognition();
+        }
+      } else listen(token);
       return true;
     }
     if (instance && recognition === instance && playbackMonitorRecognition === instance) emitState("LISTENING");

@@ -82,6 +82,14 @@ Execution is phase-gated. Work on a later phase starts only after the previous p
 
 **Current Voice Tutor setting (2026-10-10):** automatic interruption triggers have been disabled because repeated automatic barge-in did not remain reliable in learner use. During TTS playback the microphone/analyser stream and recognizer are stopped to avoid simultaneous audio capture. The **Stop speaking & listen** button cancels and invalidates playback, discards any playback recognizer, and starts a fresh browser-managed microphone recognizer for the learner's question. Playback completion likewise starts a fresh listener. Before each new utterance, a paused speech-synthesis engine is resumed; playback start, end, and synthesis errors are logged in development without recording learner text. Microphone speech during playback is not automatically submitted. This manual-only status supersedes the historical automatic-interruption implementation notes above. Manual interruption and post-cancel speech-resume regressions passed; frontend suite passed 39/39; production build passed with the existing ~6 MB WebLLM chunk warning; `git diff --check` passed. Website and installed-PWA device sequences remain NOT VERIFIED because live browser/microphone control is unavailable; automatic barge-in acceptance remains NOT PASSED.
 
+## Local Tutor persistence and connectivity follow-up (2026-10-10)
+
+- [x] Tutor now restores local-model availability from WebLLM's existing Cache API and persists the learner's Local/Server mode choice. The in-memory WebLLM runtime is shared across route mounts and concurrent loads share one initialization promise; app restarts reload only from a verified model cache.
+- [x] Keep model lifecycle states distinct: `NOT_DOWNLOADED`, `DOWNLOADING`, `DOWNLOADED`, `LOADING`, `READY`, and `ERROR`. Cancelling a cached-model load no longer deletes the already-downloaded artifacts; cancelling a first download still removes its partial cache.
+- [x] Connectivity audit found no `online` or `offline` handler that reloads the page. The only app `location.reload()` is registered after the learner presses **Update now** for an available service-worker update; ordinary disconnect/reconnect events update status and pending-sync behavior without replacing the current route.
+- [x] Frontend tests passed 40/40, frontend production build passed, backend TypeScript build passed, and `git diff --check` passed. Backend `test:offline` could not start under Node 24.13.0 because `tsx` failed at `uv_os_get_passwd` with `ENOMEM`.
+- [ ] Installed-PWA navigation, restart, model inference after offline transition, course reading through connectivity transitions, and pending-sync recovery: NOT VERIFIED in this session; no live browser/device control was available.
+
 ## Phase 5 - Full regression and release verification - NOT STARTED
 
 - [ ] Run frontend/backend builds, automated tests, and browser tests.

@@ -21,6 +21,16 @@ const stateCopy = {
   ERROR: ["Needs attention", "Review the message below, then try again."],
 };
 
+const isInstalledIOSPwa = () => {
+  const browserNavigator = globalThis.navigator;
+  const userAgent = browserNavigator?.userAgent || "";
+  const isIOS = /iPhone|iPad|iPod/i.test(userAgent)
+    || (browserNavigator?.platform === "MacIntel" && (browserNavigator?.maxTouchPoints || 0) > 1);
+  const standalone = browserNavigator?.standalone === true
+    || globalThis.window?.matchMedia?.("(display-mode: standalone)")?.matches === true;
+  return isIOS && standalone;
+};
+
 export default function VoiceTutor() {
   const learnerId = apiClient.getUserId();
   const [messages, setMessages] = useState(() => readRuntimeValue(`learner:${learnerId}:tutor`) || []);
@@ -144,6 +154,7 @@ export default function VoiceTutor() {
       onAudioLevel: (...args) => callbacks.current.onAudioLevel(...args),
       onError: (...args) => callbacks.current.onError(...args),
       onUtterance: (...args) => callbacks.current.onUtterance(...args),
+      iosPwa: isInstalledIOSPwa(),
       utteranceFactory: (text) => {
         const utterance = new SpeechSynthesisUtterance(text);
         const voices = globalThis.speechSynthesis?.getVoices?.() || availableSpeechVoices;
