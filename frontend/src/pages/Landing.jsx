@@ -1,4 +1,4 @@
-﻿import React from "react";
+import React from "react";
 import { ArrowRight, Sparkles, BrainCircuit, Mic2, Network } from "lucide-react";
 import { Link } from "react-router-dom";
 import Brand from "../components/ui/Brand";
@@ -46,7 +46,7 @@ export default function Landing() {
           ["WHY THIS QUESTION?","See exactly why ADAPT chose your next challenge.",Network,["RECENT ANSWERS","CURRENT MASTERY","NEXT CHALLENGE"]],
           ["VOICE AI","Talk, interrupt, explore and learn naturally.",Mic2,["ASK A QUESTION","EXPLORE A CONCEPT","PICK UP WHERE YOU LEFT OFF"]]
         ].map(([title,text,Icon,labels])=><div className="card card-pad card-hover" key={title}>
-          <div className="feature-visual" aria-label={labels.join(" ΓåÆ ")}><div className="mini-orb"/><div className="orbit-mini"/><div className="feature-orb-labels">{labels.map((label,index)=><span key={label} className={`feature-orb-label feature-orb-label-${index+1}`}>{label}</span>)}</div><Icon style={{position:"absolute",right:16,top:16,color:"#C8A8FF"}} size={17}/></div>
+          <div className="feature-visual" aria-label={labels.join(" → ")}><div className="mini-orb"/><div className="orbit-mini"/><div className="feature-orb-labels">{labels.map((label,index)=><span key={label} className={`feature-orb-label feature-orb-label-${index+1}`}>{label}</span>)}</div><Icon style={{position:"absolute",right:16,top:16,color:"#C8A8FF"}} size={17}/></div>
           <div className="eyebrow">{title}</div><h3 style={{fontFamily:"Space Grotesk",fontSize:20,marginTop:8}}>{text}</h3>
         </div>)}
       </div>
