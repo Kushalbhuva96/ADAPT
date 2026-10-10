@@ -19,6 +19,8 @@ export default function Practice() {
   const [retryAvailable, setRetryAvailable] = useState(false);
   const [sequence, setSequence] = useState(1);
   const [offlineMode, setOfflineMode] = useState(false);
+  const [isOnline, setIsOnline] = useState(() => navigator.onLine);
+  const [offlineQuestionAvailable, setOfflineQuestionAvailable] = useState(false);
   const [offlineSaved, setOfflineSaved] = useState(false);
   const [offlineActivityId, setOfflineActivityId] = useState(null);
   const [downloadedPack, setDownloadedPack] = useState(null);
@@ -28,7 +30,9 @@ export default function Practice() {
   const loadPromise = useRef(null);
   const nextQuestionPromise = useRef(null);
   const submittedQuestionId = useRef(null);
-  const canAnswer = Boolean(question && !loading && !busy && !result && !offlineSaved && submittedQuestionId.current !== question.id);
+  const questionRef = useRef(question);
+  questionRef.current = question;
+  const canAnswer = Boolean(question && (isOnline || (offlineMode && offlineQuestionAvailable)) && !loading && !busy && !result && !offlineSaved && submittedQuestionId.current !== question.id);
 
   const loadQuestion = async ({ preserveCurrent = false } = {}) => {
     if (!navigator.onLine) return loadOfflineQuestion();
@@ -51,8 +55,10 @@ export default function Practice() {
           }
         }
         const nextQuestion = await (pendingQuestion || api.nextPractice());
+        if (!navigator.onLine) return loadOfflineQuestion();
         setQuestion(nextQuestion);
         setOfflineMode(false);
+        setOfflineQuestionAvailable(false);
         setOfflineSaved(false);
         setOfflineActivityId(null);
         setQuestionStartedAt(Date.now());
@@ -61,6 +67,7 @@ export default function Practice() {
         submittedQuestionId.current = null;
         return nextQuestion;
       } catch (err) {
+        if (!navigator.onLine) return loadOfflineQuestion();
         setError(err.message);
         setRetryAvailable(Boolean(err.retryable));
         if (keepResult) setNextError(err.message);
@@ -74,7 +81,7 @@ export default function Practice() {
     return request;
   };
   const loadOfflineQuestion = async () => {
-    setLoading(true); setError(""); setRetryAvailable(false); setResult(null); setOfflineSaved(false); setOfflineActivityId(null); setOfflineMode(true);
+    setLoading(true); setError(""); setRetryAvailable(false); setResult(null); setOfflineSaved(false); setOfflineActivityId(null); setOfflineMode(true); setOfflineQuestionAvailable(false);
     try {
       const userId = apiClient.getUserId();
       const preferredCourseId = localStorage.getItem("adapt_active_course_id");
@@ -102,6 +109,7 @@ export default function Practice() {
         title: `${nextQuestion.topicName} Challenge`,
         adaptiveContext: { reason: "Downloaded question. ADAPT will grade this answer after it syncs.", accuracy: null, practiceAttempts: 0, strategy: "offline_practice" },
       });
+      setOfflineQuestionAvailable(true);
       setSelected(null);
       setQuestionStartedAt(Date.now());
       setSequence(activities.length + 1);
@@ -113,6 +121,48 @@ export default function Practice() {
   useEffect(() => {
     if (navigator.onLine) void loadQuestion();
     else void loadOfflineQuestion();
+  }, []);
+
+  useEffect(() => {
+    const onOffline = async () => {
+      setIsOnline(false);
+      const currentQuestion = questionRef.current;
+      if (!currentQuestion) {
+        if (!loadPromise.current) void loadOfflineQuestion();
+        return;
+      }
+      try {
+        const packs = await getDownloadedPracticePacks(apiClient.getUserId());
+        const courseId = currentQuestion.courseId || localStorage.getItem("adapt_active_course_id");
+        const preferredCourseId = localStorage.getItem("adapt_active_course_id");
+        const pack = packs.find((item) => item.courseId === courseId)
+          || packs.find((item) => item.courseId === preferredCourseId)
+          || packs[0]
+          || null;
+        setDownloadedPack(pack);
+        const matchingQuestion = pack?.questions.some((item) => item.id === currentQuestion.id) === true;
+        setOfflineQuestionAvailable(matchingQuestion);
+        setOfflineMode(matchingQuestion);
+        if (!matchingQuestion) {
+          setError("This current question is not in the downloaded practice pack. Your question stays open; use a downloaded question to continue offline.");
+        }
+      } catch (err) {
+        setOfflineQuestionAvailable(false);
+        setOfflineMode(false);
+        setError(err.message || "Downloaded practice questions could not be checked.");
+      }
+    };
+    const onOnline = () => {
+      setIsOnline(true);
+      setError((current) => current.includes("not in the downloaded practice pack") ? "" : current);
+      if (!questionRef.current) void loadQuestion();
+    };
+    window.addEventListener("offline", onOffline);
+    window.addEventListener("online", onOnline);
+    return () => {
+      window.removeEventListener("offline", onOffline);
+      window.removeEventListener("online", onOnline);
+    };
   }, []);
 
   useEffect(() => {
@@ -149,6 +199,10 @@ export default function Practice() {
 
   const submit = async () => {
     if (!selected || !question || loading || busy || result || submittedQuestionId.current === question.id) return;
+    if (!isOnline && (!offlineMode || !offlineQuestionAvailable)) {
+      setError("This question is not saved for offline use. Your current question is preserved; reconnect or switch to a downloaded question.");
+      return;
+    }
     if (offlineMode) {
       setBusy(true); setError("");
       try {
@@ -180,7 +234,7 @@ export default function Practice() {
     finally { setBusy(false); }
   };
   const next = async () => {
-    if (offlineMode) {
+    if (offlineMode && !isOnline) {
       await loadOfflineQuestion();
       return;
     }
@@ -193,7 +247,7 @@ export default function Practice() {
     {downloadMessage && <div className={downloadMessage.includes("saved on this device") ? "offline-practice-notice" : "form-error"} role="status" style={{ marginTop: 14 }}>{downloadMessage}</div>}
     {offlineMode && downloadedPack && <div className="offline-practice-notice" role="status" style={{ marginTop: 14 }}><WifiOff size={15} /><span>{downloadedPack.questions.length} downloaded questions. Answers are saved locally and remain pending until the server grades them.</span></div>}
     {error && !question && !loading && <div className="card card-pad glow" style={{ marginTop: 20 }}><h2 style={{ fontSize: 20 }}>{error}</h2>{retryAvailable && <button className="btn btn-primary" style={{ marginTop: 14 }} onClick={() => loadQuestion()}>Retry question</button>}<p className="mini" style={{ marginTop: 7 }}>{offlineMode ? "Server-generated questions and grading require a connection." : "Create a course and complete its level assessment to give ADAPT learner context for a targeted challenge."}</p><Link className="btn" style={{ marginTop: 14 }} to="/course">Open Course <ArrowRight size={14} /></Link></div>}
-    {error && question && <div className="form-error" role="alert" style={{ marginTop: 16 }}>{error}</div>}
+    {error && question && <div className="form-error" role="alert" style={{ marginTop: 16 }}>{error}{!isOnline && downloadedPack && !offlineQuestionAvailable && <button type="button" className="btn" style={{ marginLeft: 10 }} onClick={() => void loadOfflineQuestion()}>Use downloaded questions</button>}</div>}
     {loading && <div className="card card-pad" style={{ marginTop: 20 }}><div className="eyebrow">ADAPT IS THINKING…</div><p className="mini" style={{ marginTop: 8 }}>Selecting a question from your current course and saved learner signals.</p></div>}
     {question && <>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 15, alignItems: "end", marginTop: 20 }}><div><div className="eyebrow">{question.topicName} · {question.difficulty.toUpperCase()}</div><h2 className="page-title" style={{ fontSize: 30, marginTop: 8 }}>{question.title || `${question.topicName} Challenge`}</h2><p className="page-subtitle">{question.adaptiveContext?.reason}</p></div><span className="badge">CHALLENGE {String(sequence).padStart(2, "0")}</span></div>

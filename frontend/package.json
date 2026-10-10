@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test src/services/localTutor.test.js src/services/tutorMode.test.js src/services/byokSettings.test.js src/services/voiceSessionController.test.js src/services/voiceTutorService.test.js"
+    "test": "node --test src/services/localTutor.test.js src/services/tutorMode.test.js src/services/courseOfflineState.test.js src/services/byokSettings.test.js src/services/voiceSessionController.test.js src/services/voiceTutorService.test.js"
   },
   "dependencies": {
     "@mlc-ai/web-llm": "0.2.85",
