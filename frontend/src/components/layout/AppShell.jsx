@@ -7,6 +7,7 @@ import OfflineSyncStatus from "../ui/OfflineSyncStatus";
 import { useAuth } from "../../services/AuthContext";
 import { useNavigate } from "react-router-dom";
 import { activateWaitingServiceWorker } from "../../services/serviceWorker";
+import ThemeToggle from "../ui/ThemeToggle";
 
 const nav = [
   ["/dashboard", "Dashboard", Home],
@@ -63,7 +64,7 @@ export default function AppShell({ children, breadcrumb }) {
       <div className="sidebar-foot"><div className="sync-card"><div className="eyebrow">ADAPT CORE</div><div style={{ fontSize: 10, marginTop: 5 }}>Your learner model grows with your activity.</div></div></div>
     </aside>
     <main className="main-area">
-      <header className="topbar"><div>ADAPT&nbsp;&nbsp;/&nbsp;&nbsp;{breadcrumb || "WORKSPACE"}</div><div className="top-actions"><ConnectionStatus /><OfflineSyncStatus key={user?.id || "anonymous"} userId={user?.id} />{user?.name && <div className="top-status">{user.name}</div>}<Link to="/profile" className="avatar-link" aria-label="Open Profile" title="Profile"><div className="avatar">{initials || <UserRound size={14} />}</div></Link><button type="button" className="btn app-logout" onClick={signOut}><LogOut size={13}/> Sign out</button></div></header>
+      <header className="topbar"><div>ADAPT&nbsp;&nbsp;/&nbsp;&nbsp;{breadcrumb || "WORKSPACE"}</div><div className="top-actions"><ConnectionStatus /><OfflineSyncStatus key={user?.id || "anonymous"} userId={user?.id} /><ThemeToggle />{user?.name && <div className="top-status">{user.name}</div>}<Link to="/profile" className="avatar-link" aria-label="Open Profile" title="Profile"><div className="avatar">{initials || <UserRound size={14} />}</div></Link><button type="button" className="btn app-logout" onClick={signOut}><LogOut size={13}/> Sign out</button></div></header>
       {updateRegistration && <div className="pwa-update" role="status"><span>A new version of ADAPT is ready.</span><button type="button" className="btn btn-primary" onClick={() => activateWaitingServiceWorker(updateRegistration)}>Update now</button></div>}
       {children}
     </main>

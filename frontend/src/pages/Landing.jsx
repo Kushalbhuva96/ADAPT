@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import Brand from "../components/ui/Brand";
 import AIOrb from "../components/ui/AIOrb";
 import { useAuth } from "../services/AuthContext";
+import ThemeToggle from "../components/ui/ThemeToggle";
 
 export default function Landing() {
   const { user } = useAuth();
@@ -14,7 +15,8 @@ export default function Landing() {
       <div className="landing-links">
         <a href="#how">HOW IT WORKS</a><a href="#tutor">AI TUTOR</a><a href="#voice">VOICE AI</a><a href="#adaptive">ADAPTIVE LEARNING</a>
       </div>
-      <div style={{display:"flex",gap:9}}>
+      <div className="landing-nav-actions" style={{display:"flex",gap:9}}>
+        <ThemeToggle />
         <Link to="/onboarding?mode=signin" className="btn">Sign in</Link>
         <Link to={startLearningPath} className="btn btn-primary">Start Learning <ArrowRight size={14}/></Link>
       </div>
